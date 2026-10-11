@@ -1,0 +1,8 @@
+【Locate the mug and dispenser】
+Applicable before picking: identify the current mug, coffee machine and dispenser from live RGB-D. Use the complete live task_language for picking the mug from the counter and placing it under the dispenser. The successful demonstration began from a usable stance; its scene was obtained after an exploration reset and is not a fixed geometry for evaluation.
+
+【Preserve uninterrupted full-body pick and place】
+Applicable during mug transfer: the successful recipe used one rldx_skill call with the full task instruction, completing pick and place without manual commands. While a grasp, held mug or visible progress persists, preserve the skill's continuity. Failed exploration inserted manual base adjustments between calls, interrupted VLA frame history and jammed the mug against the machine. Avoid such interruptions during productive transfer; the demonstrated one call and 27 chunks are not fixed quotas.
+
+【Verify precise placement and re-ground failed recovery】
+Applicable after placing or when transfer stalls: a mug beside the drip tray is not sufficient; inspect the actual placement and available public task progress. Failed placement was several centimeters beside the tray despite a successful grasp. Preserve valid placement rather than disturbing it. After sustained no-contact or no-progress, reobserve and make only a bounded, grounded recovery adjustment. Stop on state.success; do not reproduce exploration resets or stored recipe coordinates during evaluation.

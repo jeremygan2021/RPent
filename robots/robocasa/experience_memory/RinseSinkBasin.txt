@@ -1,0 +1,8 @@
+【Face the sink and establish water flow】
+Applicable before rinsing: face the sink and use the full current task-language VLA instruction to turn it on and maneuver the spout. Verify running water from live observations and available public task progress; preserve water flow while changing spout orientation.
+
+【Sweep the spout across the basin】
+Applicable while water runs but regions remain uncovered: inspect which basin regions still need rinsing. If VLA establishes flow without moving the spout, freshly localize the visible lower spout segment and approach it from the side with small bounded contact attempts. Sweep one side, the center and the opposite side rather than repeating contact at an unchanged pose. Re-ground after every contact.
+
+【Inspect coverage and stop】
+Applicable after a spout adjustment or during recovery: inspect the next observation before continuing. Stop pushing when the wrist or spout is occluded and obtain a usable view. Do not reuse recipe positions, infer geometry from stored coordinates, or inspect private fixture predicates. Stop immediately on state.success.

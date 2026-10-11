@@ -65,6 +65,10 @@ def convert_episode(output: Path, reward_config: PPOConfig) -> dict:
     def arg(name, default=None):
         return argv[argv.index(name) + 1] if name in argv else default
 
+    if "--memory-blocks" in argv:
+        raise ValueError(
+            "legacy Memory decisions cannot be reconstructed by this adapter"
+        )
     if (
         arg("--mode") != "all"
         or code_signature(output.parent / "workspace") != EXPECTED_CODE

@@ -698,6 +698,7 @@ def view_env_state(step: int | None = None, *, state: EnvState) -> dict:
         "task_language": extras.get("task_language", ""),
         "state": record.state,
         "robocasa_terminated": record.terminated,
+        "terminated": record.terminated,
         "vla_desync": extras.get("vla_desync", False),
         "success": extras.get("success", False),
         "log": {

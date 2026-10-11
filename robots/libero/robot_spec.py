@@ -282,8 +282,8 @@ def _parse_config(args: argparse.Namespace) -> RunConfig:
     recipe_tag = f"{args.suite.replace('libero_', '')}_t{args.task}_s{args.seed}"
     explore = bool(getattr(args, "explore", False))
     prompt_profile = getattr(args, "prompt_profile", "default")
-    if prompt_profile == "compact" and (explore or args.suite not in ("libero_object_swap", "libero_10") or args.task != 1):
-        raise ValueError("compact supports libero_object_swap or libero_10 task 1 evaluation only")
+    if prompt_profile == "compact" and (explore or args.suite not in ("libero_object_swap", "libero_10", "libero_spatial", "libero_goal", "libero_90")):
+        raise ValueError("compact supports libero_object_swap, libero_10, libero_spatial, libero_goal or libero_90 evaluation only")
     requested_profile = getattr(args, "memory_profile", None)
     if explore and requested_profile == "hf":
         raise ValueError("--explore cannot be used with --memory-profile hf")

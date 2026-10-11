@@ -62,7 +62,9 @@ def test_roundtrip_deterministic_initial_policy_and_global_rng(tmp_path):
     assert torch.equal(rng, torch.random.get_rng_state())
     decision = first.decide(observation())
     assert decision == second.decide(observation()) == first.decide(observation())
-    assert dataclasses.astuple(decision.thresholds) == pytest.approx((0.2, 0.1, 0.1))
+    assert dataclasses.astuple(decision.thresholds) == pytest.approx(
+        (0.2, 0.1, 0.1, 0.5)
+    )
     assert decision.latent_action is None and decision.log_prob is None
     assert decision.value == 0
     assert all(not p.requires_grad for p in first.model.parameters())
@@ -195,3 +197,66 @@ def test_mlp_thresholds_drive_existing_image_selector(tmp_path):
         assert session.stats["rho"] == pytest.approx(rho)
         counts.append(session.stats["images_after"])
     assert counts[0] < counts[1]
+
+
+def test_legacy_checkpoint_remains_deployable_but_cannot_train(tmp_path):
+    from rpent.context.iql import IQLConfig, IQLTrainer
+    from rpent.context.observation import SCORING_VERSION
+    from rpent.context.policy import ActorCritic, legacy_feature_names
+    from rpent.context.training import PPOConfig, prepare_batch
+
+    model = ActorCritic(legacy=True)
+    with torch.no_grad():
+        model.actor.weight.zero_()
+        model.actor.bias.zero_()
+    path = tmp_path / "legacy.pt"
+    torch.save(
+        {
+            "format_version": 1,
+            "feature_version": "counts-and-lagged-scores-v1",
+            "scoring_version": SCORING_VERSION,
+            "feature_names": list(legacy_feature_names()),
+            "state_dict": model.state_dict(),
+        },
+        path,
+    )
+    policy = MLPController(path)
+    assert policy.legacy
+    assert policy.decide(observation()).thresholds.image == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="new memory-enabled"):
+        prepare_batch([], policy, PPOConfig(1000))
+    with pytest.raises(ValueError, match="new memory-enabled"):
+        IQLTrainer(policy, IQLConfig())
+
+
+@pytest.mark.parametrize("behavior,low,high", [
+    ("lower", .2, .6),
+    ("lower-moderate", .3, .6),
+    ("lower-strong", .05, .25),
+    ("lower-strong-safe", .2, .4),
+])
+@pytest.mark.parametrize("initial", [.99, .5])
+def test_relative_exploration_ranges_and_retry(tmp_path, behavior, low, high, initial):
+    path = tmp_path / "explore.pt"
+    save_checkpoint(initialize(Thresholds(initial, initial, initial, initial)), path)
+    first = MLPController(path, sample=True, seed=31, behavior=behavior)
+    second = MLPController(path, sample=True, seed=31, behavior=behavior)
+    weights = {k: v.clone() for k, v in first.model.state_dict().items()}
+    for _ in range(16):
+        decision = first.decide(observation())
+        assert decision == second.decide(observation())
+        assert decision.behavior_policy == f"lower-relative-{low:g}-{high:g}-v1"
+        assert decision.log_prob is None and decision.latent_action is None
+        values = dataclasses.astuple(decision.thresholds)
+        assert all(initial * low <= v <= initial * high for v in values)
+    assert all(torch.equal(weights[k], v) for k, v in first.model.state_dict().items())
+    session = ContextSession(CodexAdapter(("front",)), FakeFeatures(),
+                             mode="all", controller=first)
+    source = request()
+    output = session.process(source)
+    rng = first.generator.get_state().clone()
+    assert session.process(source) == output
+    assert torch.equal(rng, first.generator.get_state())
+    assert session.stats["decision"]["reused"]
+    with pytest.raises(ValueError, match="stochastic"):
+        MLPController(path, behavior=behavior)

@@ -1,0 +1,8 @@
+【Turn on the faucet and locate the lettuce】
+Applicable before washing: the successful demonstration first used the atomic faucet-on instruction and verified a visible water stream. Localize the lettuce body from interior green pixels rather than the colander rim, then center above the current lettuce/colander. Use current geometry rather than demonstration positions.
+
+【Keep the lettuce under running water】
+Applicable while washing or after a grasp: use the composite instruction 'Wash the lettuce in the sink by running water over it.' If the composite call reaches its cap after grasping, repeat the exact same instruction without a manual primitive in between while grasp/contact or increasing public washed_time supports continuity. The successful demonstration completed washing this way; do not treat its wash count as a universal threshold.
+
+【Check washing progress and recover】
+Applicable when washing stalls or appears complete: verify that the stream remains visible and the lettuce remains under it. Avoid cabinet-pick atomic instructions as the main wash step: failed attempts displaced the lettuce/colander away from the stream and sometimes left the faucet off or occluded. Use available public washed_time and current observations to assess progress; stop on state.success.

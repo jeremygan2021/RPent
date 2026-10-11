@@ -1,0 +1,8 @@
+【Retrieve and place the pan on the requested burner】
+Applicable before food placement: identify the pan, food, requested burner and visible controls from current RGB-D. Use full task-language VLA for cabinet retrieval, grasping and constrained pan placement. Continue while a held object or visible semantic progress supports continuity; after true no-contact, re-localize and re-stage. Verify the pan is upright and centered on the requested burner before proceeding.
+
+【Put the requested food in the pan】
+Applicable after stable pan placement: use the current full task-language VLA instruction for food placement. Preserve the completed pan placement and verify current food and cookware geometry. Do not continue contact when cookware becomes unstable or occluded. Use current observations rather than stored recipe coordinates.
+
+【Activate the matching burner and verify】
+Applicable after pan and food placement: approach the visible burner control from a close, front-facing stance without disturbing cookware. Use full task-language VLA for control operation. Inspect the visible burner and available public task progress afterward. If the wrong burner is active, re-localize the control row before another attempt; do not assume mapping from stored order or coordinates. Do not manipulate private fixture state. Stop immediately on state.success.

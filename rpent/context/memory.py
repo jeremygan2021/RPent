@@ -87,37 +87,117 @@ def append_memory(prompt: str, blocks: list[dict[str, str]]) -> str:
         "Re-localize from current images and use the current environment verdict.\n"
     )
 
+_OBSERVATION_ACTIONS = {
+    "view_env_state",
+    "back_project",
+    "back_project_batch",
+    "query_world_map",
+    "segment",
+}
+
+
+def _memory_recovery(items: list[dict]) -> dict:
+    """Derive recovery from ordered tool results, not task or grasp verdicts.
+
+    Full-history replay makes retries idempotent and requires no mutable
+    selector state. Repeated views of a recorded snapshot are not new actions.
+    """
+    active, trigger, resolved_by = False, None, None
+    seen_outputs, seen_snapshots = set(), set()
+    for item in items:
+        if item.get("type") not in ("function_call_output", "custom_tool_call_output"):
+            continue
+        call_id = item.get("call_id") or item.get("id")
+        if call_id and call_id in seen_outputs:
+            continue
+        if call_id:
+            seen_outputs.add(call_id)
+        output = item.get("output", [])
+        blocks = [{"text": output}] if isinstance(output, str) else output
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict) or not isinstance(block.get("text"), str):
+                continue
+            text = block["text"]
+            try:
+                value = json.loads(text)
+            except ValueError:
+                if re.search(
+                    r"(?:^|\n)\s*(?:Uncaught )?(?:Error:|Exception:|"
+                    r"Traceback \(most recent call last\):|Error executing tool)",
+                    text,
+                ):
+                    active, trigger, resolved_by = True, call_id, None
+                continue
+            if not isinstance(value, dict):
+                continue
+            log = value.get("log")
+            log = log if isinstance(log, dict) else {}
+            command, outcome = log.get("command"), log.get("result")
+            command = command if isinstance(command, dict) else {}
+            outcome = outcome if isinstance(outcome, dict) else {}
+            snapshot = "step" in value and "state" in value and "log" in value
+            if snapshot:
+                key = (value["step"], json.dumps(log, sort_keys=True))
+                if key in seen_snapshots:
+                    continue
+                seen_snapshots.add(key)
+                if value.get("terminated") is True or value.get("truncated") is True:
+                    active, resolved_by = False, call_id
+                    continue
+            failed = (
+                value.get("ok") is False
+                or bool(value.get("error"))
+                or value.get("isError") is True
+                or outcome.get("ok") is False
+                or bool(outcome.get("error"))
+            )
+            if failed:
+                active, trigger, resolved_by = True, call_id, None
+            elif (
+                snapshot
+                and command.get("action")
+                and command["action"] not in _OBSERVATION_ACTIONS
+                and (outcome.get("ok") is True or outcome.get("success") is True)
+            ):
+                active, resolved_by = False, call_id
+    return {"active": active, "trigger_call_id": trigger, "resolved_by": resolved_by}
+
 
 class MemorySelector:
-    """Reconsider every library fragment and restore complete selected experiences."""
+    """Reconsider complete operation blocks using the latest readable agent intent."""
 
-    def __init__(self, path: Path, rho: float = 0.5):
+    def __init__(self, path: Path, rho: float = 0.6):
         """Load a pre-separated experience library and validate its NC threshold."""
         blocks = load_memory_blocks(path)
         if not 0 < rho <= 1:
             raise ValueError("memory rho must be in (0, 1]")
         self.blocks, self.rho = blocks, rho
-        self.fragments = [
-            {
-                "id": f"{block['id']}:{index}",
-                "parent": block["id"],
-                "text": text.strip(),
-            }
-            for block in blocks
-            for index, text in enumerate(
-                re.split(r"(?<=[.;!?。；！？])\s+", block["text"])
-            )
-            if text.strip()
-        ]
+        # Keep the existing observation interface; each scoring record is now a block.
+        self.fragments = [{**block, "parent": block["id"]} for block in blocks]
 
     def process(self, request: dict, adapter: Any, features: Any) -> tuple[dict, dict]:
-        """Replace one managed user-prompt region; query only the latest public sentence."""
+        """Select whole blocks using readable reasoning summaries or public intent."""
         items = request.get("input")
         if not isinstance(items, list) or request.get("previous_response_id"):
             raise ValueError("memory selection requires explicit full input history")
         regions = []
         plans = []
         for i, item in enumerate(items):
+            if item.get("type") == "reasoning":
+                summary = item.get("summary", [])
+                if isinstance(summary, list):
+                    text = "\n".join(
+                        part["text"].strip()
+                        for part in summary
+                        if isinstance(part, dict)
+                        and part.get("type") == "summary_text"
+                        and isinstance(part.get("text"), str)
+                        and part["text"].strip()
+                    )
+                    if text:
+                        plans.append((text, "reasoning_summary"))
             content = item.get("content", [])
             if not isinstance(content, list):
                 continue
@@ -128,9 +208,10 @@ class MemorySelector:
                 if (
                     item.get("role") == "assistant"
                     and block.get("type") == "output_text"
+                    and item.get("phase") != "final_answer"
                     and text.strip()
                 ):
-                    plans.append(text.strip())
+                    plans.append((text.strip(), "public_text"))
                 if item.get("role") != "user":
                     continue
                 if START in text or END in text:
@@ -146,10 +227,9 @@ class MemorySelector:
             raise ValueError(
                 "memory selection requires exactly one managed user region"
             )
-        sentences = re.split(r"(?<=[.!?。！？])\s+", plans[-1]) if plans else []
-        query = sentences[-1].strip() if sentences else ""
         actions = adapter.extract_action(request)
         task = actions[-1].snapshot.get("task_language", "") if actions else ""
+        query, query_source = plans[-1] if plans else (task.strip(), "task")
         scores = (
             {
                 fragment["id"]: features.similarity(fragment["text"], query)
@@ -158,7 +238,14 @@ class MemorySelector:
             if task and query
             else {}
         )
-        if not task:
+        recovery = _memory_recovery(items)
+        if self.rho == 1:
+            kept = {fragment["id"] for fragment in self.fragments}
+            reason = "full_memory"
+        elif recovery["active"]:
+            kept = {fragment["id"] for fragment in self.fragments}
+            reason = "execution_error_keep_all"
+        elif not task:
             i, j, a, b = regions[0]
             expected = "\n" + "\n".join(block["text"] for block in self.blocks) + "\n"
             if items[i]["content"][j]["text"][a:b] != expected:
@@ -183,8 +270,11 @@ class MemorySelector:
             result["input"][i]["content"][j]["text"] = rewritten
         total = sum(scores.values())
         stats = {
+            "recovery": recovery,
             "rho": self.rho,
             "query": query,
+            "query_source": query_source,
+            "score_rule": "whole_block_cosine",
             "reason": reason,
             "selection_nc": sum(scores[k] for k in kept) / total if total else None,
             "selected_blocks": [block["id"] for block in selected],

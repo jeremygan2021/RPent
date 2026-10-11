@@ -15,7 +15,7 @@
 """Incremental selection of snapshot state and execution details."""
 
 from dataclasses import dataclass
-from math import isfinite
+from math import acos, isfinite, pi, sqrt
 
 from .selection import select_by_nc
 
@@ -65,6 +65,33 @@ def difference(current, previous, ranges, features=None):
     return sum(values) / len(values) if values else None
 
 
+def orientation_difference(current: dict, previous: dict) -> float | None:
+    """Compare EEF quaternion states by rotation angle, independent of q/-q sign.
+
+    Snapshot fields ending in ``_eef_quat`` carry four-component quaternions.
+    Unknown, zero-length, or nonfinite representations contribute no comparison.
+    Their scalar components must not also enter numeric field averaging.
+    """
+    changes = []
+    for key in current.keys() & previous.keys():
+        if not key.endswith("_eef_quat"):
+            continue
+        a, b = current[key], previous[key]
+        if not all(
+            isinstance(q, (list, tuple))
+            and len(q) == 4
+            and all(type(v) in (int, float) and isfinite(v) for v in q)
+            for q in (a, b)
+        ):
+            continue
+        na, nb = sqrt(sum(v * v for v in a)), sqrt(sum(v * v for v in b))
+        if not all(isfinite(n) and n > 1e-12 for n in (na, nb)):
+            continue
+        dot = abs(sum((x / na) * (y / nb) for x, y in zip(a, b)))
+        changes.append(2 * acos(min(1.0, dot)) / pi)
+    return sum(changes) / len(changes) if changes else None
+
+
 class ActionSelector:
     def __init__(self, ranges=None):
         # Keys are state.<field> or command.<field>; no inferred numeric scales.
@@ -98,11 +125,7 @@ class ActionSelector:
         unscaled = set()
         for record in records:
             value = record.snapshot
-            eligible = (
-                record.id not in self._seen
-                or record.id in self._kept
-                or record.protected
-            )
+            eligible = True
             command = value["log"].get("command") or {}
             result = value["log"].get("result") or {}
             event = int(
@@ -111,7 +134,7 @@ class ActionSelector:
                 or value.get("terminated") is True
                 or value.get("truncated") is True
             )
-            action = state = score = None
+            action = state = orientation = score = None
             reference = None
             if eligible:
                 numeric_fields = dict(
@@ -146,18 +169,28 @@ class ActionSelector:
                                 if k.startswith("command.")
                             }
                             action = difference(a, b, ranges, features)
-                    # State descriptors (e.g. object_names) are not physical changes.
+                    # State descriptors are not physical changes. Quaternions
+                    # use angular distance rather than four scalar differences.
+                    current_state, old_state = value["state"], old["state"]
+                    quat_prefixes = tuple(
+                        "state." + key + "."
+                        for key in current_state.keys() | old_state.keys()
+                        if key.endswith("_eef_quat")
+                    )
                     a = {
                         k: v
-                        for k, v in flatten(value["state"], "state").items()
-                        if not isinstance(v, str)
+                        for k, v in flatten(current_state, "state").items()
+                        if not isinstance(v, str) and not k.startswith(quat_prefixes)
                     }
                     b = {
                         k: v
-                        for k, v in flatten(old["state"], "state").items()
-                        if not isinstance(v, str)
+                        for k, v in flatten(old_state, "state").items()
+                        if not isinstance(v, str) and not k.startswith(quat_prefixes)
                     }
                     state = difference(a, b, self.ranges)
+                    orientation = orientation_difference(current_state, old_state)
+                    state_parts = [v for v in (state, orientation) if v is not None]
+                    state = sum(state_parts) / len(state_parts) if state_parts else None
                     old_result = old["log"].get("result") or {}
                     if (
                         isinstance(result.get("success"), bool)
@@ -187,6 +220,7 @@ class ActionSelector:
                     "reference": reference,
                     "action_change": action,
                     "state_change": state,
+                    "orientation_change": orientation,
                     "event": event,
                     "score": score,
                     "reason": "protected"

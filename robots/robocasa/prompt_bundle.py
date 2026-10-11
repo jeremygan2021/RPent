@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 
 from robots.robocasa import prompts as robocasa_prompt
@@ -31,7 +32,7 @@ def system_prompt(
         "Intro": robocasa_prompt.PREAMBLE,
         "Goal": robocasa_prompt.GOAL,
         "Rules": robocasa_prompt.RULES,
-        "Memory": robocasa_prompt.MEMORY,
+        "Memory": ("Use the demonstration experience supplied in the user prompt; do not read additional memory files." if os.environ.get("RPENT_MEMORY_IN_PROMPT") == "1" else robocasa_prompt.MEMORY),
         "Localization": robocasa_prompt.LOCALIZATION,
         "Navigation": robocasa_prompt.NAVIGATION,
         "Primitives": robocasa_prompt.PRIMITIVES,

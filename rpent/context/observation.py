@@ -17,8 +17,8 @@
 from dataclasses import dataclass
 from math import log1p
 
-FEATURE_VERSION = "counts-and-lagged-scores-v1"
-SCORING_VERSION = "fixed-scale-incremental-v1"
+FEATURE_VERSION = "counts-full-history-toolrules-chronological-pose-v3"
+SCORING_VERSION = "score-mass-full-history-toolrules-chronological-pose-v3"
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,7 @@ def observe(
     thresholds: object,
     decision_count: int,
     stage_known: bool,
+    memory_selector=None,
 ) -> Observation:
     """Read state without scoring or committing a selection.
 
@@ -49,10 +50,8 @@ def observe(
     for modality in ("image", "text", "action"):
         rows = records[modality]
         seen, kept = states[modality]
-        eligible = [r for r in rows if r.id not in seen or r.id in kept or r.protected]
-        candidates = [
-            r for r in eligible if not r.protected and not getattr(r, "initial", False)
-        ]
+        eligible = rows
+        candidates = [r for r in eligible if not r.protected]
         prefix = modality + "."
         values[prefix + "enabled"] = float(modality in enabled)
         values[prefix + "records_log"] = log1p(len(rows))
@@ -79,4 +78,25 @@ def observe(
             values[prefix + "previous_" + field + "_missing"] = 1 - len(measured) / max(
                 1, len(old_rows)
             )
+    memory = previous.get("memory", {})
+    old_rows = memory.get("records", [])
+    values["memory.enabled"] = float(memory_selector is not None)
+    values["memory.blocks_log"] = (
+        log1p(len(memory_selector.blocks)) if memory_selector else 0.0
+    )
+    values["memory.fragments_log"] = (
+        log1p(len(memory_selector.fragments)) if memory_selector else 0.0
+    )
+    values["memory.previous_rho"] = getattr(thresholds, "memory", 0.5)
+    values["memory.previous_selection_available"] = float(bool(memory))
+    values["memory.previous_retained_fraction"] = (
+        len(memory.get("selected_blocks", [])) / max(1, len(memory_selector.blocks))
+        if memory_selector
+        else 0.0
+    )
+    relevance = [r["relevance"] for r in old_rows if r.get("relevance") is not None]
+    values["memory.previous_relevance_mean"] = sum(relevance) / max(1, len(relevance))
+    values["memory.previous_relevance_missing"] = float(not relevance)
+    values["memory.previous_nc"] = memory.get("selection_nc") or 0.0
+    values["memory.previous_nc_missing"] = float(memory.get("selection_nc") is None)
     return Observation(tuple(values), tuple(float(x) for x in values.values()))

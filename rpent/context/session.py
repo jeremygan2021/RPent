@@ -17,7 +17,7 @@
 import copy
 import hashlib
 import json
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 from .controller import Controller, FixedController, Thresholds
 from .observation import SCORING_VERSION, observe
@@ -49,6 +49,7 @@ class ContextSession:
             raise ValueError("invalid context mode or rho")
         self.adapter, self.features = adapter, features
         self.memory_selector = memory_selector
+        self.rho_memory = memory_selector.rho if memory_selector else 0.5
         self.mode, self.rho, self.stage = mode, rho, stage
         self.rho_image = rho if rho_image is None else rho_image
         self.rho_text = rho if rho_text is None else rho_text
@@ -58,7 +59,7 @@ class ContextSession:
         ):
             raise ValueError("modality rho must be in (0, 1]")
         self.controller = controller or FixedController(
-            Thresholds(self.rho_image, self.rho_text, self.rho_action)
+            Thresholds(self.rho_image, self.rho_text, self.rho_action, self.rho_memory)
         )
         self._decision_count = 0
         self._last_request = None
@@ -112,9 +113,10 @@ class ContextSession:
             },
             enabled,
             self._last_stats,
-            Thresholds(self.rho_image, self.rho_text, self.rho_action),
+            Thresholds(self.rho_image, self.rho_text, self.rho_action, self.rho_memory),
             self._decision_count,
             self.stage != "Unknown",
+            self.memory_selector,
         )
         decision = self.controller.decide(observation)
         thresholds = Thresholds(**asdict(decision.thresholds))
@@ -128,6 +130,7 @@ class ContextSession:
                 self.rho_image,
                 self.rho_text,
                 self.rho_action,
+                self.rho_memory,
             )
         )
         self.rho_image, self.rho_text, self.rho_action = (
@@ -135,6 +138,12 @@ class ContextSession:
             thresholds.text,
             thresholds.action,
         )
+        if not getattr(self.controller, "legacy", False):
+            self.rho_memory = thresholds.memory
+        else:
+            decision = replace(
+                decision, thresholds=replace(thresholds, memory=self.rho_memory)
+            )
         try:
             result = self._select(request)
         except Exception:
@@ -147,7 +156,10 @@ class ContextSession:
                 self.rho_image,
                 self.rho_text,
                 self.rho_action,
+                self.rho_memory,
             ) = saved
+            if self.memory_selector is not None:
+                self.memory_selector.rho = self.rho_memory
             self.stats = copy.deepcopy(self._last_stats)
             raise
         self._decision_count += 1
@@ -168,6 +180,7 @@ class ContextSession:
         """Run selectors once in their existing dependency order."""
         memory_stats = None
         if self.memory_selector is not None:
+            self.memory_selector.rho = self.rho_memory
             request, memory_stats = self.memory_selector.process(
                 request, self.adapter, self.features
             )
@@ -208,26 +221,9 @@ class ContextSession:
         )
         if signature == self._signature:
             return self.adapter.render(request, records, self._kept)
-        eligible = {
-            r.id
-            for r in records
-            if r.id not in self._seen or r.id in self._kept or r.protected
-        }
+        eligible = {r.id for r in records}
         previous, scores, details = {}, {}, []
         for record in records:
-            if record.initial:
-                details.append(
-                    {
-                        "id": record.id,
-                        "camera": record.camera,
-                        "protected": record.protected,
-                        "novelty": None,
-                        "relevance": None,
-                        "score": None,
-                        "reason": "initial_observation",
-                    }
-                )
-                continue
             if record.id not in eligible:
                 details.append(
                     {

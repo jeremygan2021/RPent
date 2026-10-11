@@ -18,9 +18,11 @@ Run one proxy per episode. Full mode forwards original bytes unchanged.
 """
 
 import argparse
+import copy
 import gzip
 import json
 import logging
+import os
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,7 +30,7 @@ from pathlib import Path
 
 import httpx
 
-from .codex import CodexAdapter
+from .anchor import AnchorAdapter as CodexAdapter
 from .features import Features
 from .session import ContextSession
 
@@ -56,6 +58,39 @@ def rewrite_body(
     if not isinstance(payload, dict):
         return raw, False
     result = session.process(payload)
+    session.stats.pop("cache_prefix", None)
+    reference_path = os.environ.get("RPENT_FIXED_TOOL_REFERENCE") or (
+        Path(__file__).resolve().parents[2] / "tool_reference.json"
+    )
+    if (
+        isinstance(payload.get("input"), list)
+        and payload["input"]
+        and not payload.get("previous_response_id")
+    ):
+        from .cache_prefix import ToolReference, move_memory_to_tail
+
+        native = False
+        preserve_tool_history = os.environ.get("RPENT_PRESERVE_TOOL_HISTORY") == "1"
+        if getattr(session, "mode", "all") != "full" and not preserve_tool_history:
+            reference = getattr(session, "_fixed_tool_reference", None)
+            if reference is None:
+                reference = ToolReference(reference_path)
+                session._fixed_tool_reference = reference
+            native = reference.native_tools_cover_reference(result)
+            if not native:
+                result, session.stats["cache_prefix"] = reference.apply(result)
+        if native or getattr(session, "mode", "all") == "full" or preserve_tool_history:
+            layout = copy.deepcopy(result)
+            moved = move_memory_to_tail(layout)
+            if moved:
+                result = layout
+            session.stats["cache_prefix"] = {
+                "enabled": False,
+                "native_tools": native,
+                "memory_layout": "dynamic-tail-v1",
+                "memory_moved": moved,
+                "duplicates_removed": 0,
+            }
     if result is payload:
         return raw, False
     return json.dumps(result, ensure_ascii=False).encode(), True
@@ -205,7 +240,12 @@ def serve(
                         self.wfile.write(chunk)
                         self.wfile.flush()
             except (httpx.HTTPError, OSError):
-                logger.exception("Context proxy upstream failed")
+                logger.exception(
+                    "Context proxy forwarding failed: method=%s path=%s request_id=%s",
+                    self.command,
+                    self.path.split("?", 1)[0],
+                    request_id,
+                )
                 self.close_connection = True
                 timing["transport_error"] = True
             finally:
@@ -260,13 +300,25 @@ def main() -> None:
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--audit-dir", type=Path)
     parser.add_argument(
-        "--memory-blocks", type=Path,
+        "--memory-blocks",
+        type=Path,
         help="Demonstration memory (.txt with titled blocks or block-list .json).",
     )
-    parser.add_argument("--rho-memory", type=float, default=0.5)
+    parser.add_argument("--rho-memory", type=float, default=0.6)
     parser.add_argument("--controller-checkpoint", type=Path)
     parser.add_argument("--controller-sample", action="store_true")
     parser.add_argument("--controller-seed", type=int, default=0)
+    parser.add_argument(
+        "--controller-behavior",
+        choices=[
+            "actor",
+            "lower",
+            "lower-moderate",
+            "lower-strong",
+            "lower-strong-safe",
+        ],
+        default="actor",
+    )
     args = parser.parse_args()
     if args.controller_sample and not args.controller_checkpoint:
         parser.error("--controller-sample requires --controller-checkpoint")
@@ -286,6 +338,7 @@ def main() -> None:
                 args.controller_checkpoint,
                 sample=args.controller_sample,
                 seed=args.controller_seed,
+                behavior=args.controller_behavior,
             )
         memory_selector = None
         if args.memory_blocks:

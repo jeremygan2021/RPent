@@ -256,3 +256,27 @@ def test_current_rldx_processor_geometry_is_not_rebuilt(monkeypatch) -> None:
     assert _normalize_legacy_processor_geometry(processor) is False
     assert processor.image_max_area == 131072
     assert processor.image_resize_m == 64
+
+
+
+def test_vla_seed_replays_random_sequence_without_repeating_each_chunk() -> None:
+    import random
+
+    import numpy as np
+    import pytest
+
+    torch = pytest.importorskip("torch")
+    from robots.robocasa.vla_server import _seed_vla_random_state
+
+    def sample():
+        return random.random(), np.random.rand(4), torch.randn(4)
+
+    _seed_vla_random_state(0)
+    first, second = sample(), sample()
+    _seed_vla_random_state(0)
+    replay_first, replay_second = sample(), sample()
+    for actual, expected in ((first, replay_first), (second, replay_second)):
+        assert actual[0] == expected[0]
+        np.testing.assert_array_equal(actual[1], expected[1])
+        assert torch.equal(actual[2], expected[2])
+    assert not torch.equal(first[2], second[2])

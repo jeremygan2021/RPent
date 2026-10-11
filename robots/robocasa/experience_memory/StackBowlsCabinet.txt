@@ -1,0 +1,8 @@
+【Grasp and transfer the bowls to the cabinet】
+Applicable while picking or carrying the counter bowls: use the full current task-language VLA instruction to stack them in the open cabinet, with the smaller bowl on top of the larger one. The successful seed-0 recipe used two consecutive identical full-task calls; this is a procedural prior, not a required call count. Continue the same call while current observations show contact, holding or productive transport. Re-localize bowls and cabinet from current RGB-D; never replay demonstration coordinates.
+
+【Place and verify the nested bowls】
+Applicable after a bowl placement or release: inspect current images and public task_progress before continuing. Check that both bowls are inside the open cabinet and nested with the smaller bowl above the larger bowl. Stop immediately on state.success. Continued motion after a completed or nearly completed placement can knock the bowls apart or out.
+
+【Recover a fallen or hidden bowl】
+Applicable if a bowl falls or nesting fails: repeated VLA calls from the original cabinet stance are ineffective for a fallen bowl. Re-localize both bowls, recover the fallen bowl first, then return to the cabinet. Do not attempt blind manual nesting when the smaller bowl is not visible. Ground recovery geometry in current observations.

@@ -39,6 +39,8 @@ class PPOConfig:
     value_weight: float = 0.5
     max_grad_norm: float = 0.5
     target_kl: float = 0.02
+    latency_beta: float = 0.0
+    latency_scale: float = 1200.0
 
     def __post_init__(self) -> None:
         for name, value in asdict(self).items():
@@ -48,7 +50,7 @@ class PPOConfig:
                 or not math.isfinite(value)
             ):
                 raise ValueError(f"{name} must be a finite number")
-            if value < 0 or (name not in {"beta", "value_weight"} and value == 0):
+            if value < 0 or (name not in {"beta", "latency_beta", "value_weight"} and value == 0):
                 raise ValueError(f"invalid {name}: {value}")
         if type(self.epochs) is not int or not 0 < self.clip < 1:
             raise ValueError("epochs must be an integer and clip must be in (0, 1)")
@@ -69,7 +71,7 @@ class Batch:
 
 
 def rewards_and_returns(
-    costs: list[int], success: bool, config: PPOConfig
+    costs: list[int], success: bool, config: PPOConfig, task_duration_s: float | None = None
 ) -> tuple[list[float], list[float]]:
     """Charge every attempt once, add terminal success once, use gamma=1."""
     if not costs or type(success) is not bool:
@@ -77,6 +79,10 @@ def rewards_and_returns(
     if any(type(c) is not int or c < 0 for c in costs):
         raise ValueError("input token counts must be nonnegative integers")
     rewards = [-config.beta * c / config.token_scale for c in costs]
+    if config.latency_beta:
+        if isinstance(task_duration_s, bool) or not isinstance(task_duration_s, (int, float)) or not math.isfinite(task_duration_s) or task_duration_s < 0:
+            raise ValueError("valid task_duration_s required for latency reward")
+        rewards[-1] -= config.latency_beta * task_duration_s / config.latency_scale
     rewards[-1] += int(success)
     returns = [0.0] * len(rewards)
     total = 0.0
@@ -90,6 +96,10 @@ def prepare_batch(
     trajectories: list[dict], policy: MLPController, config: PPOConfig
 ) -> Batch:
     """Reject missing, stale, deterministic or inconsistent records before training."""
+    if policy.legacy:
+        raise ValueError(
+            "four-dimensional PPO requires a new memory-enabled checkpoint"
+        )
     xs, actions, log_probs, values, rewards, returns, lengths = (
         [],
         [],
@@ -178,17 +188,21 @@ def prepare_batch(
                 .clamp(1e-12, 1 - 1e-12)
             )
             recorded_rho = torch.tensor(
-                [decision["thresholds"][m] for m in ("image", "text", "action")],
+                [
+                    decision["thresholds"][m]
+                    for m in ("image", "text", "action", "memory")
+                ],
                 dtype=torch.float64,
             )
-            if expected_rho.shape != (3,) or not torch.allclose(
+            if expected_rho.shape != (4,) or not torch.allclose(
                 expected_rho, recorded_rho, atol=1e-9, rtol=1e-7
             ):
                 raise ValueError(
                     f"{episode}: thresholds do not match sampled latent action"
                 )
         reward, target = rewards_and_returns(
-            costs, outcome["environment_success"], config
+            costs, outcome["environment_success"], config,
+            (outcome.get("timing") or {}).get("task_duration_s")
         )
         rewards.extend(reward)
         returns.extend(target)
@@ -202,7 +216,7 @@ def prepare_batch(
     n = len(xs)
     if (
         x.shape != (n, len(feature_names()))
-        or action.shape != (n, 3)
+        or action.shape != (n, 4)
         or old_log.shape != (n,)
         or old_value.shape != (n,)
     ):

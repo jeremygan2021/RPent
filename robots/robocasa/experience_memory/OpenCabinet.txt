@@ -1,0 +1,8 @@
+【Locate the requested cabinet and choose full-body execution】
+Applicable before opening: identify the cabinet requested by the full live task_language from current RGB-D. In the successful demonstration, two rldx_arm calls raised the arm toward the handle but never established contact. The demonstrated recovery switched to rldx_skill so the policy could use unrestricted base motion to align with the handle. Prefer that full-body approach when arm-only reach does not establish contact; do not replay the demonstration's base or handle coordinates.
+
+【Preserve productive cabinet-opening continuity】
+Applicable while approaching or opening: use rldx_skill with the complete current task_language. In the successful recipe, the first full-body call reached its cap and the second succeeded without manual arm positioning between them. Preserve continuity when current observations support contact or productive approach. Two calls and 24 chunks are examples, not fixed quotas or guarantees.
+
+【Verify opening and re-ground stalled attempts】
+Applicable after a call or during recovery: confirm completion using current public task_progress and state.success, not command completion or the appearance of a partially open door. If repeated calls do not establish contact or progress, reobserve the requested handle and current base alignment before another bounded attempt. Stop on state.success. Do not inspect private door joints, replay stored coordinates, or reset the environment during evaluation.

@@ -7,6 +7,38 @@ clock_lock=Lock()
 clock_data={}
 original_solve=CodexPlanner.solve
 
+if os.environ.get('RPENT_CODEX_LIBERO_PROFILE') == '1':
+    original_build_config = CodexPlanner._build_config
+
+    def build_libero_config(self, mcp_url):
+        config = original_build_config(self, mcp_url)
+        instructions = Path(__file__).with_name('robocasa_instructions.md' if os.environ.get('RPENT_CODEX_ROBOCASA_PROFILE') == '1' else 'libero_instructions.md').resolve()
+        overrides = {
+            'features.apps': False,
+            'features.multi_agent': False,
+            'features.goals': False,
+            'features.image_generation': False,
+            'features.plugins': False,
+            'web_search': 'disabled',
+            'model_instructions_file': str(instructions),
+        }
+        home = Path(os.environ.get('CODEX_HOME', str(Path.home() / '.codex')))
+        skills = list((home / 'skills').rglob('SKILL.md'))
+        skills.extend((home / 'plugins' / 'cache').rglob('SKILL.md'))
+        skills.extend((Path(self._repo_root) / '.agents' / 'skills').glob('*/SKILL.md'))
+        disabled = ', '.join(
+            '{ path = ' + json.dumps(str(path.resolve())) + ', enabled = false }'
+            for path in sorted(set(skills))
+        )
+        config.config_overrides += tuple(
+            f'{key}={json.dumps(value)}' for key, value in overrides.items()
+        )
+        if disabled:
+            config.config_overrides += (f'skills.config=[{disabled}]',)
+        return config
+
+    CodexPlanner._build_config = build_libero_config
+
 def write_clock():
     (out/'timing.json').write_text(json.dumps(clock_data,ensure_ascii=False,indent=2))
 
@@ -19,11 +51,12 @@ def mark_end(reason):
             write_clock()
 
 def solve(self,*args,**kwargs):
+    kwargs["user_message"] += "\nFor this run, finish is not available. After the environment verdict, save the required audit and end with a brief final response. Do not discover or call finish."
     compact = '--prompt-profile=compact' in sys.argv or any(
         flag == '--prompt-profile' and value == 'compact'
         for flag, value in zip(sys.argv, sys.argv[1:])
     )
-    if not compact:
+    if not compact and os.environ.get('RPENT_CODEX_ROBOCASA_PROFILE') != '1':
         kwargs["user_message"] += (
             "\n\nFor this run, first discover and call view_env_state to read the current "
             "task_language and initial observation before reading task memories or guides. "
@@ -56,7 +89,7 @@ def observed(self):
             continue
         if not isinstance(value,dict):
             continue
-        if value.get('terminated') is True and 'state' in value:
+        if (value.get('terminated') is True or value.get('robocasa_terminated') is True) and 'state' in value:
             mark_end('environment_terminated')
         elif value.get('truncated') is True and 'state' in value:
             mark_end('environment_truncated')
@@ -69,5 +102,7 @@ def observed(self):
         else:blocks.append(b)
     with (out/'tool-results.jsonl').open('a') as f:f.write(json.dumps(dict(time=time.time(),name=self.name,blocks=blocks),ensure_ascii=False)+'\n')
 ToolResult.__post_init__=observed
+from rpent.tools import common
+common.TOOLS_SPEC[:] = [spec for spec in common.TOOLS_SPEC if spec["name"] != "finish"]
 from rpent.cli.main import main
 raise SystemExit(main())

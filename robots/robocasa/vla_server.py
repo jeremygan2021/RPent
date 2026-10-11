@@ -29,6 +29,22 @@ logger = get_logger("vla_server")
 RLDX_BACKBONE_REVISION = "4b9f870d1287e0d38d7eb1445e6d8c60afe66dd7"
 
 
+
+def _seed_vla_random_state(seed: int) -> None:
+    """Reset inference RNGs without changing the policy's noise distribution."""
+    import random
+
+    import torch
+
+    if not 0 <= seed < 2**32:
+        raise ValueError("RLDX_VLA_SEED must be in [0, 2**32)")
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
 def _build_processor_image_transforms(processor):
     from rldx.data.augmentations import build_image_transformations_albumentations
 
@@ -68,6 +84,10 @@ class RoboCasaVLAFacade(BaseVLAFacade):
         from rldx.data.embodiment_tags import EmbodimentTag
         from rldx.eval.rollout_policy import create_rldx_sim_policy
 
+        configured_seed = os.environ.get("RLDX_VLA_SEED")
+        self.random_seed = int(configured_seed) if configured_seed is not None else None
+        if self.random_seed is not None:
+            _seed_vla_random_state(self.random_seed)
         self.policy = create_rldx_sim_policy(
             model_path,
             EmbodimentTag.GENERAL_EMBODIMENT,
@@ -83,8 +103,13 @@ class RoboCasaVLAFacade(BaseVLAFacade):
         mod = self.policy.get_modality_config()
         self._vdi = np.asarray(mod["video"].delta_indices)
         self._hist_maxlen = int(self._vdi.max() - self._vdi.min()) + 2
+        if self.random_seed is not None:
+            # Model initialization may consume random numbers; inference starts fresh.
+            _seed_vla_random_state(self.random_seed)
+            logger.info("VLA inference random seed: %s", self.random_seed)
         print(
-            f"[vla_server] policy loaded; video_delta_indices={self._vdi.tolist()} "
+            f"[vla_server] policy loaded; random_seed={self.random_seed} "
+            f" video_delta_indices={self._vdi.tolist()} "
             f"hist_maxlen={self._hist_maxlen} backbone_revision={RLDX_BACKBONE_REVISION}",
             flush=True,
         )

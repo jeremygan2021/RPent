@@ -22,14 +22,15 @@ from .observation import Observation
 
 @dataclass(frozen=True)
 class Thresholds:
-    """Requested score-mass coverage, in image/text/action order."""
+    """Requested score-mass coverage, in image/text/action/memory order."""
 
     image: float
     text: float
     action: float
+    memory: float = 0.5
 
     def __post_init__(self) -> None:
-        for value in (self.image, self.text, self.action):
+        for value in (self.image, self.text, self.action, self.memory):
             if (
                 isinstance(value, bool)
                 or not isinstance(value, (int, float))
@@ -44,9 +45,10 @@ class Decision:
 
     thresholds: Thresholds
     policy_version: str = "fixed-v1"
-    latent_action: tuple[float, float, float] | None = None
+    latent_action: tuple[float, ...] | None = None
     log_prob: float | None = None
     value: float | None = None
+    behavior_policy: str = "actor"
 
 
 class Controller(Protocol):

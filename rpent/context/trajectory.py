@@ -125,6 +125,8 @@ def assemble(records: list[dict], outcome: dict | None, *, episode_id: str) -> d
                     r["id"] for r in stats.get("records", []) if not r["selected"]
                 ],
             }
+        if "memory" in selection:
+            selection_result["memory"] = selection["memory"]
         row["attempts"].append(
             {
                 "request_id": record["request_id"],

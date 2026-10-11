@@ -1,0 +1,8 @@
+【Identify the requested microwave control】
+Applicable before pressing: use the full live task_language and current observations to identify the microwave and requested start control. The official successful seed-0 reference contains the instruction 'Press the start button on the microwave.' Its strategy_notes are empty, so it provides no demonstrated pixel, contact trajectory or manual positioning procedure. Ground any required geometry in current RGB-D.
+
+【Execute the start-button task with full-body VLA】
+Applicable when beginning the operation: the official winning recipe used one rldx_skill call with 'Press the start button on the microwave.' Use the current environment's complete task_language rather than replacing it with a stored instruction when wording differs. The single call is an example, not a required count; the reference does not establish a successful manual pressing fallback.
+
+【Verify activation and handle missing progress】
+Applicable after execution: inspect the returned observation, available public task_progress and state.success; stop immediately on success. If activation is not confirmed, reobserve before deciding whether to continue or re-ground the approach. These verification and recovery constraints are general runtime guidance, not additional actions documented by the winning recipe. Do not assume a stored button position, mutate private appliance state, or replay exploration resets during evaluation.

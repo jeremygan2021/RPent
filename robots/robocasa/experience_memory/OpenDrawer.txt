@@ -1,0 +1,8 @@
+【Identify the requested drawer】
+Applicable before contact: read the full current task_language to identify the requested drawer; the demonstration requested the left drawer, but other scenes may differ. Locate its visible handle using current RGB-D. The successful demonstration started within reach and required no navigation; verify the current stance rather than assuming it.
+
+【Grasp the handle and pull with arm VLA】
+Applicable when the requested handle is visible and reachable: the successful recipe used one rldx_arm call with the verbatim task_language. Let the policy establish contact and pull the drawer; preserve continuity while contact or visible opening progress persists. Its 22 prediction chunks are an example, not a fixed execution budget.
+
+【Verify opening and recover without blind pulling】
+Applicable after a call: inspect current observations and available public task_progress, and stop immediately on state.success. The successful demonstration needed no manual fallback. If current execution fails to establish contact or makes no progress, re-ground the requested handle before another attempt; do not replay demonstration base positions, infer success from command completion, or inspect private slide joints.

@@ -30,7 +30,11 @@ from rpent.context.iql import (  # noqa: E402
     load_transitions,
     td_target,
 )
-from rpent.context.policy import MLPController, feature_names, save_checkpoint  # noqa: E402
+from rpent.context.policy import (  # noqa: E402
+    MLPController,
+    feature_names,
+    save_checkpoint,
+)
 
 
 def dataset():
@@ -55,7 +59,7 @@ def dataset():
                 "transitions": [
                     {
                         "state": state,
-                        "action": [0.2, 0.1, 0.1],
+                        "action": [0.2, 0.1, 0.1, 0.5],
                         "input_tokens": 100,
                         "reward": -0.01,
                         "next_state": next_state.copy(),
@@ -63,7 +67,7 @@ def dataset():
                     },
                     {
                         "state": next_state,
-                        "action": [0.4, 0.2, 0.2],
+                        "action": [0.4, 0.2, 0.2, 0.7],
                         "input_tokens": 200,
                         "reward": 0.98,
                         "next_state": [0.0] * len(state),
@@ -164,7 +168,12 @@ def test_modern_audit_conversion_accepts_verified_failure_and_rejects_bad_costs(
                     "id": 1,
                     "observation": observation_data,
                     "scoring_version": SCORING_VERSION,
-                    "thresholds": {"image": 0.2, "text": 0.1, "action": 0.1},
+                    "thresholds": {
+                        "image": 0.2,
+                        "text": 0.1,
+                        "action": 0.1,
+                        "memory": 0.5,
+                    },
                 },
                 "attempts": [
                     {
@@ -186,3 +195,32 @@ def test_modern_audit_conversion_accepts_verified_failure_and_rejects_bad_costs(
     trajectory["decisions"][0]["attempts"][0]["usage"] = {}
     with pytest.raises(ValueError):
         dataset_from_trajectories([trajectory], PPOConfig(1000))
+
+
+def test_iql_then_ppo_updates_memory_and_exports_four_thresholds(tmp_path):
+    from rpent.context.training import PPOConfig, prepare_batch, update
+    from tests.unit_tests.rpent.context.test_training import episode
+
+    base = MLPController(checkpoint(tmp_path))
+    trainer = IQLTrainer(base, IQLConfig(), seed=7)
+    before = trainer.actor.actor.bias[3].detach().clone()
+    for _ in range(5):
+        trainer.update(load_transitions(dataset()), 16)
+    assert trainer.actor.actor.bias[3] != before
+    offline = tmp_path / "iql.pt"
+    save_checkpoint(trainer.actor, offline)
+    policy = MLPController(offline, sample=True, seed=9)
+    trajectories = [
+        episode(policy, episode_id=f"e{i}", costs=(100,), success=i % 2 == 0)
+        for i in range(4)
+    ]
+    config = PPOConfig(1000, epochs=2)
+    batch = prepare_batch(trajectories, policy, config)
+    assert batch.actions.shape == (4, 4)
+    model, metrics = update(policy, batch, config)
+    assert model.actor.bias[3] != policy.model.actor.bias[3]
+    final = tmp_path / "iql-ppo.pt"
+    save_checkpoint(model, final)
+    decision = MLPController(final).decide(observation())
+    assert 0 < decision.thresholds.memory < 1
+    assert metrics["updates"] > 0

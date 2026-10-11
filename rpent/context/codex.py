@@ -20,7 +20,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-
 _OUTPUT_TYPES = {
     "custom_tool_call_output": "custom_tool_call",
     "function_call_output": "function_call",
@@ -28,11 +27,29 @@ _OUTPUT_TYPES = {
 _CALL_TYPES = set(_OUTPUT_TYPES.values())
 
 
+def action_summary(snapshot):
+    """Retain decision evidence while omitting detailed robot diagnostics."""
+    log = snapshot["log"]
+    command = log.get("command") or {}
+    outcome = log.get("result") or {}
+    return {
+        "command": {k: command[k] for k in (
+            "action", "name", "instruction", "prompt", "xyz", "xy", "dxyz", "gripper"
+        ) if k in command},
+        "result": {k: outcome[k] for k in (
+            "name", "ok", "success", "error", "status", "terminated", "truncated",
+            "grasped", "grasp_detected", "grasp_contact", "held_apart", "grasp_obj",
+            "chunks", "steps_applied", "pos_error", "distance", "target_distance"
+        ) if k in outcome},
+    }
+
+
 def _paired_outputs(items):
     """Recognize results only when the matching native call type is present."""
     calls = {(x.get("type"), x.get("call_id")) for x in items if x.get("call_id")}
     return {
-        i for i, x in enumerate(items)
+        i
+        for i, x in enumerate(items)
         if x.get("call_id")
         and (_OUTPUT_TYPES.get(x.get("type")), x.get("call_id")) in calls
     }
@@ -57,8 +74,9 @@ class ImageRecord:
 class CodexAdapter:
     """Extract only recognized snapshot images; preserve all other content."""
 
-    def __init__(self, cameras: tuple[str, ...] = ()):
+    def __init__(self, cameras: tuple[str, ...] = (), *, extended_history=True):
         self.cameras = cameras
+        self.extended_history = extended_history
 
     def extract(self, request: dict) -> list[ImageRecord]:
         records = []
@@ -66,18 +84,11 @@ class CodexAdapter:
         if not isinstance(items, list) or request.get("previous_response_id"):
             return records
         paired = _paired_outputs(items)
-        completed = [
-            x.get("call_id")
-            for i, x in enumerate(items)
-            if i in paired
-        ]
+        completed = [x.get("call_id") for i, x in enumerate(items) if i in paired]
         recent = set(completed[-2:])
         calls = {x.get("call_id") for x in items if x.get("type") in _CALL_TYPES}
         for mi, item in enumerate(items):
-            if (
-                mi not in paired
-                or item.get("call_id") not in calls
-            ):
+            if mi not in paired or item.get("call_id") not in calls:
                 continue
             snapshot, camera_index = None, 0
             output = item.get("output")
@@ -243,7 +254,7 @@ class CodexAdapter:
             preceding = [i for i, _, _ in candidates if i < calls[call_id]]
             if preceding:
                 protected.add(preceding[-1])
-        return [
+        records = [
             TextRecord(
                 key,
                 i,
@@ -252,16 +263,95 @@ class CodexAdapter:
                 tuple(sorted(call for call in events if call in text)),
             )
             for i, key, text in candidates
-        ], query
+        ]
+        if self.extended_history:
+            from .scope import active_error, schema
+
+            action_blocks = {(r.item, r.block) for r in self.extract_action(request)}
+            recent = set(outputs[-2:])
+            for i in sorted(paired):
+                item = items[i]
+                blocks = item.get("output")
+                if not isinstance(blocks, list):
+                    continue
+                for j, block in enumerate(blocks):
+                    if block.get("type") != "input_text" or (i, j) in action_blocks:
+                        continue
+                    text = block.get("text", "")
+                    if (
+                        not text
+                        or text == "[Earlier image omitted by context selection.]"
+                    ):
+                        continue
+                    try:
+                        payload = json.loads(text)
+                    except ValueError:
+                        payload = None
+                    if (
+                        isinstance(payload, dict)
+                        and type(payload.get("step")) is int
+                        and payload.get("context_omitted") is True
+                    ):
+                        continue
+                    # Localization results remain available outside ordinary Text NC.
+                    if (
+                        isinstance(payload, dict)
+                        and isinstance(payload.get("camera"), str)
+                        and type(payload.get("step")) is int
+                        and (
+                            any(
+                                isinstance(payload.get(key), list)
+                                and len(payload[key]) == 3
+                                for key in ("world_xyz", "center_xyz", "median_xyz")
+                            )
+                            or (
+                                isinstance(payload.get("results"), list)
+                                and isinstance(payload.get("summary"), dict)
+                                and "median_xyz" in payload["summary"]
+                                and all(
+                                    isinstance(result, dict) and "world_xyz" in result
+                                    for result in payload["results"]
+                                )
+                            )
+                        )
+                    ):
+                        continue
+                    # Tool schemas and errors remain available to the agent.
+                    records.append(
+                        TextRecord(
+                            f"{item.get('id', item['call_id'])}:text:{j}",
+                            i,
+                            text,
+                            item["call_id"] in recent
+                            or schema(text)
+                            or active_error(text),
+                            (),
+                            j,
+                        )
+                    )
+        return records, query
 
     def render_text(self, request: dict, records, keep: set[str]) -> dict:
         """Remove selected plain assistant messages; preserve tools and reasoning."""
-        dropped = {r.item for r in records if r.id not in keep}
+        dropped = [r for r in records if r.id not in keep]
         if not dropped:
             return request
         result = copy.deepcopy(request)
+        messages = {r.item for r in dropped if r.block is None}
+        blocks = {(r.item, r.block) for r in dropped if r.block is not None}
+        for i, item in enumerate(result["input"]):
+            if isinstance(item.get("output"), list):
+                item["output"] = [
+                    block
+                    for j, block in enumerate(item["output"])
+                    if (i, j) not in blocks
+                ]
+                if not item["output"]:
+                    item["output"] = [
+                        {"type": "input_text", "text": "[Earlier result omitted.]"}
+                    ]
         result["input"] = [
-            item for i, item in enumerate(result["input"]) if i not in dropped
+            item for i, item in enumerate(result["input"]) if i not in messages
         ]
         return result
 
@@ -278,11 +368,7 @@ class CodexAdapter:
         items = request["input"]
         paired = _paired_outputs(items)
         calls = {x.get("call_id") for x in items if x.get("type") in _CALL_TYPES}
-        outputs = [
-            x.get("call_id")
-            for i, x in enumerate(items)
-            if i in paired
-        ]
+        outputs = [x.get("call_id") for i, x in enumerate(items) if i in paired]
         records = []
         for i, item in enumerate(items):
             if (
@@ -336,6 +422,28 @@ class CodexAdapter:
             return request
         result = copy.deepcopy(request)
         for record in dropped:
+            if self.extended_history:
+                snapshot = record.snapshot
+                outcome = snapshot["log"].get("result") or {}
+                value = {
+                    "step": snapshot["step"],
+                    "context_omitted": True,
+                    **{
+                        k: snapshot[k]
+                        for k in ("terminated", "truncated")
+                        if k in snapshot
+                    },
+                    **{
+                        k: snapshot[k]
+                        for k in ("task_progress", "success", "vla_desync")
+                        if k in snapshot
+                    },
+                    **action_summary(snapshot),
+                }
+                result["input"][record.item]["output"][record.block]["text"] = (
+                    json.dumps(value, ensure_ascii=False)
+                )
+                continue
             value = copy.deepcopy(record.snapshot)
             value["state"] = {"context_omitted": True}
             original = value["log"].get("result")
@@ -350,4 +458,21 @@ class CodexAdapter:
             result["input"][record.item]["output"][record.block]["text"] = json.dumps(
                 value, ensure_ascii=False
             )
+        if self.extended_history:
+            # Only known robot calls with all snapshots omitted are shortened.
+            # Preserve native identifiers, selected-image dependencies and unknown calls.
+            grouped = {}
+            for record in records:
+                grouped.setdefault(record.item, []).append(record)
+            for position, group in grouped.items():
+                if any(r.id in keep for r in group):
+                    continue
+                output = result["input"][position]
+                for call in result["input"]:
+                    if call.get("type") == "custom_tool_call" and call.get(
+                        "call_id"
+                    ) == output.get("call_id"):
+                        call["input"] = (
+                            "// Earlier robot call; outcome retained in paired result."
+                        )
         return result

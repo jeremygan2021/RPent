@@ -17,6 +17,9 @@
 import copy
 import json
 
+import pytest
+
+from rpent.context.anchor import AnchorAdapter
 from rpent.context.codex import CodexAdapter
 from rpent.context.session import ContextSession
 
@@ -305,3 +308,58 @@ def test_missing_reference_does_not_outrank_equally_relevant_duplicate():
     # should select the newer occurrence, not reward the missing reference.
     assert not records["m0"]["selected"]
     assert records["m1"]["selected"]
+
+
+@pytest.mark.parametrize("adapter_type", [CodexAdapter, AnchorAdapter])
+@pytest.mark.parametrize(
+    "coordinates",
+    [
+        {"world_xyz": [-0.11, -0.23, 0.018]},
+        {"center_xyz": [-0.045, 0.284, 0.097], "median_xyz": [-0.045, 0.284, 0.097]},
+        {
+            "results": [
+                {"world_xyz": [1.0, 2.0, 3.0], "valid": True, "error": None},
+                {"world_xyz": None, "valid": False, "error": "invalid depth"},
+            ],
+            "summary": {"median_xyz": [1.0, 2.0, 3.0], "valid_count": 1, "total_count": 2},
+        },
+        {
+            "results": [
+                {"world_xyz": None, "valid": False, "error": "invalid depth"},
+            ],
+            "summary": {"median_xyz": None, "valid_count": 0, "total_count": 1},
+        },
+    ],
+)
+def test_old_localization_results_survive_text_selection(adapter_type, coordinates):
+    source = history()
+    output = next(
+        item
+        for item in source["input"]
+        if item.get("type") == "custom_tool_call_output"
+    )
+    text = json.dumps(
+        {
+            "camera": "agentview",
+            "resolution": "high",
+            "step": 0,
+            "source_artifact": "agentview_world_high.npz",
+            **coordinates,
+        }
+    )
+    output["output"][0]["text"] = text
+    original = copy.deepcopy(source)
+    session = ContextSession(adapter_type(), Features(), mode="text", rho_text=0.1)
+
+    result = session.process(source)
+
+    assert source == original
+    assert any(not record["selected"] for record in session.stats["text"]["records"])
+    assert all(record["text"] != text for record in session.stats["text"]["records"])
+    retained = next(
+        item
+        for item in result["input"]
+        if item.get("call_id") == output["call_id"]
+        and item.get("type") == "custom_tool_call_output"
+    )
+    assert retained == output

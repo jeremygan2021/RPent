@@ -30,6 +30,7 @@ class TextRecord:
     text: str
     protected: bool
     event_refs: tuple[str, ...] = ()
+    block: int | None = None
 
 
 class TextSelector:
@@ -51,11 +52,7 @@ class TextSelector:
             return adapter.render_text(request, records, self._kept)
         previous, scores, details = [], {}, []
         for record in records:
-            eligible = (
-                record.id not in self._seen
-                or record.id in self._kept
-                or record.protected
-            )
+            eligible = True
             relevance = novelty = score = None
             event = int(bool(record.event_refs))
             if eligible:

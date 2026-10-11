@@ -44,6 +44,9 @@ def summarize(out):
     if states_path.exists():
         steps=states.get('steps',[])
         summary['action_steps']=sum(bool(x.get('command')) for x in steps)
+    baseline_path = out/"network-baseline.json"
+    if baseline_path.exists():
+        summary["network_baseline"] = json.loads(baseline_path.read_text())
     (out/'summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2))
     lines=['# 逐请求记录','','token 来自服务返回；缺失记为未返回，不估算。latency 为代理收到请求到响应流结束，包含插件和网络时间。工具执行结果见 states.json 和 tool-results.jsonl。','','| 请求 | 最新步骤 | 输入 token | 输出 token | latency 秒 | 新省略 Image / Text / Action 数量 |','| --- | --- | --- | --- | --- | --- |']
     for r in records:

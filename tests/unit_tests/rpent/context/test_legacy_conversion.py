@@ -105,7 +105,8 @@ def test_conversion_matches_live_observations_and_keeps_real_actions(
     assert len(transitions) == 2
     for transition, log in zip(transitions, logs):
         assert transition["state"] == list(log["decision"]["observation"]["values"])
-        assert transition["action"] == [0.2, 0.1, 0.1]
+        # Legacy source has no Memory selector; the fourth action is inactive.
+        assert transition["action"] == [0.2, 0.1, 0.1, 0.5]
     assert transitions[0]["next_state"] == transitions[1]["state"]
     assert [t["reward"] for t in transitions] == pytest.approx([-0.01, 0.98])
     assert transitions[1]["done"] is True

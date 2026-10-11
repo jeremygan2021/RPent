@@ -259,3 +259,33 @@ def test_proxy_rejects_bad_ranges_at_startup(monkeypatch, tmp_path, content):
     with pytest.raises(SystemExit) as error:
         proxy.main()
     assert error.value.code == 2
+
+
+@pytest.mark.parametrize("with_image", [False, True])
+def test_robocasa_omitted_action_retains_execution_evidence(with_image):
+    from rpent.context.anchor import AnchorAdapter
+
+    request = history()
+    output = request["input"][1]
+    snapshot = json.loads(output["output"][0]["text"])
+    snapshot["task_progress"] = {"water_on": False}
+    snapshot["success"] = False
+    snapshot["log"]["result"] = {
+        "status": "cap", "grasp_detected": False, "details": "long diagnostics"
+    }
+    output["output"][0]["text"] = json.dumps(snapshot)
+    if with_image:
+        output["output"].append({"type": "input_image", "image_url": "opaque"})
+    original = copy.deepcopy(request)
+    adapter = AnchorAdapter()
+    records = adapter.extract_action(request)
+    keep = {record.id for record in records if record.snapshot["step"] != 0}
+    result = adapter.render_action(request, records, keep)
+    value = json.loads(result["input"][1]["output"][0]["text"])
+    summary = value["log"] if with_image else value
+    assert summary["command"]["action"] == "move"
+    assert summary["result"] == {"status": "cap", "grasp_detected": False}
+    assert value["task_progress"] == {"water_on": False}
+    assert value["success"] is False
+    assert request == original
+    assert result["input"][-4:] == request["input"][-4:]

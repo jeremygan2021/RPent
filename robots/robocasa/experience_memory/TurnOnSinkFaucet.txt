@@ -1,0 +1,8 @@
+【Inspect the faucet and current stance】
+Applicable before turning on the water: locate the sink faucet and visible handle from current RGB-D. The successful demonstration began within arm reach and needed no navigation; use that as a procedural example, not an assumption about the current seed. Use the full live task_language.
+
+【Turn on the faucet with arm VLA】
+Applicable from a usable faucet-facing stance: the successful recipe used one rldx_arm call with 'Turn on the sink faucet.' Let the call execute and inspect its result. One call is an example, not a required call count. Avoid unnecessary base motion when the faucet is already reachable.
+
+【Verify water flow and handle stalled execution】
+Applicable after the call or when progress stalls: confirm running water from live observations and available public task_progress, and stop on state.success. Failed exploration showed repeated calls drifting past the faucet and preserving an unproductive pose. Do not continue indefinitely without contact or progress; reobserve and re-ground before a bounded adjustment. The demonstration's reset belonged to exploration and must not be replayed during evaluation. Do not inspect private fixture joints or reuse stored coordinates.

@@ -1,0 +1,8 @@
+【Locate and grasp the sponge】
+Applicable before board contact: locate the sponge and cutting board from live RGB-D. Use the full task-language VLA instruction for sponge grasp and initial board contact. Preserve the grasp and continue VLA while the sponge is visibly held or the arm makes productive contact toward the board; avoid large base turns while carrying it.
+
+【Scrub the visible board surface】
+Applicable while the sponge contacts the board: short scrub strokes or pressing can clean the board. Use small bounded lateral motions only when current RGB-D supports continued surface contact. Keep strokes within the visible board interior and inspect after each stroke. Do not press on an occluded surface or replay stored board coordinates.
+
+【Re-stage failed contact or finish cleaning】
+Applicable after no contact or completed cleaning: if no contact was established, re-localize the sponge and re-stage the wrist above a visible interior board region before another VLA attempt. The task calls for releasing the sponge once finished; follow current task progress and stop immediately when state.success becomes true.

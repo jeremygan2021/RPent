@@ -36,7 +36,7 @@ from .training import PPOConfig, rewards_and_returns
 
 @dataclass(frozen=True)
 class Transitions:
-    """Offline tensors; actions are three rho values, not robot commands."""
+    """Offline tensors; actions are four rho values, not robot commands."""
 
     states: torch.Tensor
     actions: torch.Tensor
@@ -90,7 +90,7 @@ def load_transitions(dataset: dict) -> Transitions:
         for k in ("state", "action", "reward", "next_state", "done")
     ]
     n, size = len(rows), len(feature_names())
-    if [tuple(t.shape) for t in tensors] != [(n, size), (n, 3), (n,), (n, size), (n,)]:
+    if [tuple(t.shape) for t in tensors] != [(n, size), (n, 4), (n,), (n, size), (n,)]:
         raise ValueError("invalid offline tensor shapes")
     if any(not torch.isfinite(t).all() for t in tensors):
         raise ValueError("offline data must be finite")
@@ -148,7 +148,8 @@ def dataset_from_trajectories(trajectories: list[dict], config: PPOConfig) -> di
                 {
                     "state": observation["values"],
                     "action": [
-                        decision["thresholds"][m] for m in ("image", "text", "action")
+                        decision["thresholds"][m]
+                        for m in ("image", "text", "action", "memory")
                     ],
                     "input_tokens": cost,
                 }
@@ -239,6 +240,10 @@ class IQLTrainer:
     """Own offline Q/V optimizers and a copy of the existing deployable Actor."""
 
     def __init__(self, policy: MLPController, config: IQLConfig, seed: int = 0) -> None:
+        if policy.legacy:
+            raise ValueError(
+                "four-dimensional IQL requires a new memory-enabled checkpoint"
+            )
         self.config = config
         self.actor = copy.deepcopy(policy.model).requires_grad_(True)
         # This shared-body PPO value head is not IQL's independent V network.
@@ -250,7 +255,7 @@ class IQLTrainer:
         with torch.random.fork_rng(devices=[]):
             torch.random.default_generator.manual_seed(seed)
             self.q = nn.ModuleList(
-                [value_network(len(feature_names()) + 3) for _ in range(2)]
+                [value_network(len(feature_names()) + 4) for _ in range(2)]
             )
             self.v = value_network(len(feature_names()))
         self.target_q = copy.deepcopy(self.q).requires_grad_(False)

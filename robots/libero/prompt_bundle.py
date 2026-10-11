@@ -70,11 +70,10 @@ def user_prompt(variables: Mapping[str, object] | None = None) -> PromptNode:
 
 def _validate_compact(variables: Mapping[str, object]) -> None:
     if (
-        variables.get("suite") not in ("libero_object_swap", "libero_10")
-        or variables.get("task") != 1
+        variables.get("suite") not in ("libero_object_swap", "libero_10", "libero_spatial", "libero_goal", "libero_90")
         or variables.get("mode", "eval") != "eval"
     ):
-        raise ValueError("compact supports libero_object_swap or libero_10 task 1 evaluation only")
+        raise ValueError("compact supports libero_object_swap, libero_10, libero_spatial, libero_goal or libero_90 evaluation only")
 
 
 __all__ = ["system_prompt", "user_prompt"]

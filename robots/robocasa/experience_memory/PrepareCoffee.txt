@@ -1,0 +1,8 @@
+【Find, grasp and transfer the mug】
+Applicable before or during mug retrieval: identify the current mug and dispenser from live RGB-D. Require a centered mug view when cabinet frames occlude it. Use the full task-language VLA instruction to pick the mug and place it under the dispenser. Preserve continuity while the mug is held or grasp evidence and visible progress persist; do not use demonstration coordinates.
+
+【Preserve valid mug placement and retreat】
+Applicable when the mug has been placed under the dispenser: if public contact_check is true, avoid further mug manipulation. Retreat the open gripper until gripper_obj_far is true, then close it away from the mug. If a measured push invalidates contact_check, withdraw opposite the push before lifting. Manual refinement is only appropriate for upright, stable, near-threshold placement with a clear offset; a tipped mug or large uncertain correction is a failed placement.
+
+【Activate the coffee machine and finish】
+Applicable after valid mug placement: freshly localize the visible front button and approach with closed gripper tips. In the successful demonstration this approach activated the machine without a separate poke; verify current activation rather than assuming it. Retreat in small back/up steps until gripper_button_far and gripper_obj_far are true while contact_check remains true, using only available public progress. Confirm state.success and stop.

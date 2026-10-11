@@ -1,0 +1,8 @@
+【Move the chicken drumstick into the bowl】
+Applicable while loading the first leftover: identify the chicken drumstick, cucumber, their plates and the destination bowl from current RGB-D. The successful seed-0 recipe used repeated full-task VLA calls with the instruction to put both foods in the bowl and then put the bowl in the fridge. Treat that sequence as a structural prior, not fixed coordinates or a fixed call count. Check current progress to determine which food still needs transfer.
+
+【Complete loading both leftovers】
+Applicable while either food is still on its plate: continue the full current task-language VLA instruction to place the chicken drumstick and cucumber into the same bowl. Ground object identity and the bowl location in the current scene. Before the fridge-transfer stage, inspect current observations and available public progress for both foods being in the bowl.
+
+【Transfer the loaded bowl to the fridge】
+Applicable after both leftovers are in the bowl: the remaining task is to put the loaded bowl in the fridge. Continue the current full-task VLA instruction using freshly grounded bowl and fridge geometry. The successful seed-0 demonstration used four full-task VLA calls in total and no manual commands; this is an example, not a retry quota. Confirm completion from state.success and stop.
