@@ -292,6 +292,7 @@ def _spawn_env_server(
             env_overrides={
                 "MUJOCO_GL": "egl",
                 "ROBOT_PLATFORM": "ROBOCASA",
+                "PYTHONHASHSEED": "0",
                 # Standard RPent evaluation uses --seed directly. Do not let a
                 # stale variable from legacy paired-scene runs change the reset.
                 "RLDX_RESET_SEED": "",

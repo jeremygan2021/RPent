@@ -86,6 +86,10 @@ for label,mode,rho in queue:
             env['RPENT_CODEX_ROBOCASA_PROFILE']='1'
             env['RPENT_MEMORY_IN_PROMPT']='1'
             env['RPENT_PRESERVE_TOOL_HISTORY']='1'
+            env['RLDX_INITIAL_STATE_PATH']=str(
+                BASE.parent/'initial_states'/
+                f'{args_cli.task_name}_{args_cli.split}_s{args_cli.seed}.json'
+            )
         if args_cli.rpent_baseline:
             for key in ('RPENT_CODEX_LIBERO_PROFILE','RPENT_CODEX_ROBOCASA_PROFILE','RPENT_MEMORY_IN_PROMPT'):
                 env.pop(key,None)

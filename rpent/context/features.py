@@ -15,16 +15,20 @@
 """Lazy, cached features for visual scheme B."""
 
 import io
+from collections import OrderedDict
 
 
 class Features:
     """Cache embeddings and 64-bit horizontal difference hashes."""
+
+    _SIMILARITY_CACHE_LIMIT = 4096
 
     def __init__(self, model: str):
         self.model = model
         self._encoder = None
         self._vectors = {}
         self._hashes = {}
+        self._similarities = OrderedDict()
 
     def warmup(self) -> None:
         """Load and exercise the encoder in the process that will serve requests."""
@@ -34,6 +38,10 @@ class Features:
         """Return nonnegative cosine similarity, zero for missing metadata."""
         if not text or not query:
             return 0.0
+        key = (text, query)
+        if key in self._similarities:
+            self._similarities.move_to_end(key)
+            return self._similarities[key]
         if self._encoder is None:
             from sentence_transformers import SentenceTransformer
 
@@ -44,7 +52,11 @@ class Features:
         if missing:
             values = self._encoder.encode(missing, normalize_embeddings=True)
             self._vectors.update(zip(missing, values))
-        return max(0.0, min(1.0, float(self._vectors[text] @ self._vectors[query])))
+        score = max(0.0, min(1.0, float(self._vectors[text] @ self._vectors[query])))
+        if len(self._similarities) >= self._SIMILARITY_CACHE_LIMIT:
+            self._similarities.popitem(last=False)
+        self._similarities[key] = score
+        return score
 
     def dhash(self, digest: str, data: bytes) -> int:
         """Return a cached hash without changing the model's original image."""

@@ -424,7 +424,9 @@ def test_execution_error_restores_all_memory_until_action_success(tmp_path, acti
     assert repeated == selector.process(request, adapter, features)[1]
 
 
-@pytest.mark.parametrize("outcome", [{"success": False}, {"grasped": False}, {"ok": True}])
+@pytest.mark.parametrize(
+    "outcome", [{"success": False}, {"grasped": False}, {"ok": True}]
+)
 def test_unconfirmed_grasp_does_not_trigger_memory_recovery(tmp_path, outcome):
     selector, request, features, adapter = setup(tmp_path)
     features.scores = {"Object is blue; distinguish it.": 0.9}
@@ -461,3 +463,60 @@ def test_episode_end_clears_memory_recovery(tmp_path, flag):
     _append_recovery_result(request, "done", "move_to", {}, step=2, **{flag: True})
     _, stats = selector.process(request, adapter, features)
     assert not stats["recovery"]["active"]
+
+
+def test_public_stage_intent_updates_query_and_restores_relevant_memory(tmp_path):
+    selector, request, _, adapter = setup(tmp_path)
+
+    class StageFeatures:
+        def similarity(self, text, query):
+            if "Next: Identify" in query:
+                return 0.9 if "blue" in text else 0.1
+            return 0.9 if "Place" in text else 0.1
+
+    features = StageFeatures()
+    for stage, intent, expected in [
+        ("identification", "Identify the blue object", "identify"),
+        ("placement", "Lower the held object into the basket", "place"),
+    ]:
+        request["input"].append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [
+                    {"type": "output_text", "text": f"Stage: {stage}; Next: {intent}"}
+                ],
+            }
+        )
+        # Summary or tool text must not replace the explicit public status.
+        request["input"].extend(
+            [
+                {
+                    "type": "reasoning",
+                    "summary": [
+                        {"type": "summary_text", "text": "Generic task summary"}
+                    ],
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "output": "Stage: unrelated; Next: Ignore the real stage",
+                },
+            ]
+        )
+        request, stats = selector.process(request, adapter, features)
+        assert stats["query_source"] == "stage_intent"
+        assert stats["stage"] == stage
+        assert stats["next_intent"] == intent
+        assert stats["query"] == f"Stage: {stage}; Next: {intent}"
+        assert stats["selected_blocks"] == [expected]
+
+    request["input"].append(
+        {
+            "role": "assistant",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": "Stage: finished; Next: Stop"}],
+        }
+    )
+    _, stats = selector.process(request, adapter, features)
+    assert stats["stage"] == "placement"

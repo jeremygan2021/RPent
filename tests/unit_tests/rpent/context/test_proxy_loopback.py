@@ -188,3 +188,44 @@ def test_encoder_warmup_completes_before_serving(monkeypatch, tmp_path, mode):
     )
     proxy.main()
     assert events == (["serve"] if mode == "full" else ["warmup", "serve"])
+
+
+
+@pytest.mark.parametrize("mode", ["full", "all"])
+def test_robot_profile_removes_unused_interfaces_in_both_modes(monkeypatch, mode):
+    from types import SimpleNamespace
+    from rpent.context.proxy import rewrite_body
+
+    monkeypatch.setenv("RPENT_CODEX_ROBOCASA_PROFILE", "1")
+    monkeypatch.setenv("RPENT_PRESERVE_TOOL_HISTORY", "1")
+    request = {"input": [
+        {"type": "additional_tools", "tools": [
+            {"type": "namespace", "name": "functions", "tools": [
+                {"name": "exec"}, {"name": "wait"},
+                {"name": "request_user_input"}, {"name": "request_user_input_async"},
+            ]},
+            {"type": "namespace", "name": "collaboration", "tools": [{"name": "spawn_agent"}]},
+            {"type": "namespace", "name": "clock", "tools": [{"name": "sleep"}]},
+            {"type": "namespace", "name": "rpent", "tools": [{"name": "rldx_arm"}]},
+        ]},
+        {"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "<multi_agent_role>irrelevant rules"},
+            {"type": "input_text", "text": "Preserve robot instructions"},
+        ]},
+        {"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "<multi_agent_mode>irrelevant rules"},
+        ]},
+        {"type": "message", "role": "user", "content": [
+            {"type": "input_text", "text": "<multi_agent_role>quoted task data"},
+        ]},
+    ]}
+    session = SimpleNamespace(mode=mode, stats={}, process=lambda value: value)
+    rewritten, changed = rewrite_body(json.dumps(request).encode(), "", session)
+    result = json.loads(rewritten)
+    assert changed
+    assert [x["name"] for x in result["input"][0]["tools"]] == ["functions", "rpent"]
+    assert [x["name"] for x in result["input"][0]["tools"][0]["tools"]] == ["exec", "wait"]
+    assert result["input"][1]["content"][0]["text"] == "Preserve robot instructions"
+    assert result["input"][2]["content"][0]["text"] == "<multi_agent_role>quoted task data"
+    again, changed_again = rewrite_body(rewritten, "", session)
+    assert again == rewritten and not changed_again

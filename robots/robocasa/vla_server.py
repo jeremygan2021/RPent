@@ -107,6 +107,21 @@ class RoboCasaVLAFacade(BaseVLAFacade):
             # Model initialization may consume random numbers; inference starts fresh.
             _seed_vla_random_state(self.random_seed)
             logger.info("VLA inference random seed: %s", self.random_seed)
+            import hashlib
+            import pickle
+            import random
+
+            import torch
+
+            rng_state = (
+                random.getstate(), np.random.get_state(), torch.get_rng_state().numpy(),
+                [state.cpu().numpy() for state in torch.cuda.get_rng_state_all()]
+                if torch.cuda.is_available() else [],
+            )
+            logger.info(
+                "Initial VLA RNG sha256=%s",
+                hashlib.sha256(pickle.dumps(rng_state, protocol=4)).hexdigest(),
+            )
         print(
             f"[vla_server] policy loaded; random_seed={self.random_seed} "
             f" video_delta_indices={self._vdi.tolist()} "

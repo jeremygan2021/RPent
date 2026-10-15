@@ -436,6 +436,11 @@ def test_successful_fake_codex_lifecycle_uses_fake_mcp_and_accounts_events(
     assert fake_codex.closed is True
     submitted_prompt = fake_codex.thread.turn_prompts[0][0]
     assert submitted_prompt.endswith("system rules\n\nuser task")
+    assert (
+        "Stage: <current task stage>; Next: <next concrete operation and target>."
+        in submitted_prompt
+    )
+    assert "public\ncommentary line" in submitted_prompt
     assert 'if (block.type === "image") image(block);' in submitted_prompt
     assert 'else if (block.type === "text") text(block.text);' in submitted_prompt
     assert "Never\nuse text(result)" in submitted_prompt

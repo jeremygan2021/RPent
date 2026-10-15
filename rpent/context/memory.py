@@ -20,10 +20,15 @@ import re
 from pathlib import Path
 from typing import Any
 
+from .parsing import parse_payload
 from .selection import select_by_nc
 
 START = "[RPENT_MEMORY]"
 END = "[/RPENT_MEMORY]"
+_STAGE_INTENT = re.compile(
+    r"^Stage:[ \t]*(?P<stage>[^;\n]+);[ \t]*Next:[ \t]*(?P<intent>[^\n]+)$",
+    re.MULTILINE,
+)
 
 
 def load_memory_blocks(path: Path) -> list[dict[str, str]]:
@@ -87,6 +92,7 @@ def append_memory(prompt: str, blocks: list[dict[str, str]]) -> str:
         "Re-localize from current images and use the current environment verdict.\n"
     )
 
+
 _OBSERVATION_ACTIONS = {
     "view_env_state",
     "back_project",
@@ -121,7 +127,7 @@ def _memory_recovery(items: list[dict]) -> dict:
                 continue
             text = block["text"]
             try:
-                value = json.loads(text)
+                value = parse_payload(text)
             except ValueError:
                 if re.search(
                     r"(?:^|\n)\s*(?:Uncaught )?(?:Error:|Exception:|"
@@ -184,6 +190,7 @@ class MemorySelector:
             raise ValueError("memory selection requires explicit full input history")
         regions = []
         plans = []
+        stage_intents = []
         for i, item in enumerate(items):
             if item.get("type") == "reasoning":
                 summary = item.get("summary", [])
@@ -212,6 +219,10 @@ class MemorySelector:
                     and text.strip()
                 ):
                     plans.append((text.strip(), "public_text"))
+                    for match in _STAGE_INTENT.finditer(text.strip()):
+                        stage, intent = match["stage"].strip(), match["intent"].strip()
+                        if stage and intent:
+                            stage_intents.append((stage, intent))
                 if item.get("role") != "user":
                     continue
                 if START in text or END in text:
@@ -230,6 +241,9 @@ class MemorySelector:
         actions = adapter.extract_action(request)
         task = actions[-1].snapshot.get("task_language", "") if actions else ""
         query, query_source = plans[-1] if plans else (task.strip(), "task")
+        stage, intent = stage_intents[-1] if stage_intents else (None, None)
+        if stage_intents:
+            query, query_source = f"Stage: {stage}; Next: {intent}", "stage_intent"
         scores = (
             {
                 fragment["id"]: features.similarity(fragment["text"], query)
@@ -274,6 +288,8 @@ class MemorySelector:
             "rho": self.rho,
             "query": query,
             "query_source": query_source,
+            "stage": stage,
+            "next_intent": intent,
             "score_rule": "whole_block_cosine",
             "reason": reason,
             "selection_nc": sum(scores[k] for k in kept) / total if total else None,

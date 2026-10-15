@@ -64,6 +64,7 @@ _TOOL_OUTPUT_INSTRUCTIONS = """RPent tool output handling:
 When calling RPent MCP tools through exec, forward each result's content blocks:
 
 ```javascript
+// @exec: {"yield_time_ms": 10000}
 const result = await tools[toolName](args);
 for (const block of result.content ?? []) {
   if (block.type === "image") image(block);
@@ -71,11 +72,27 @@ for (const block of result.content ?? []) {
 }
 ```
 
+For every RPent action, including rldx_arm and rldx_skill, use a 10000 ms
+initial exec wait. If exec yields a running cell, await that same cell with
+functions.wait and explicitly set yield_time_ms=10000 on every poll until it
+completes. Do not shorten the wait or launch another robot action while the
+current action is running. This wait window does not limit VLA execution time.
+
 Set toolName and args to the actual tool name and arguments. Apply this
 to every RPent tool result, including observations and action results. Never
 use text(result), text(result.content), JSON.stringify(result), or print image
 base64 data. Preserve the content order and forward all returned text and
-image blocks once."""
+image blocks once.
+
+Before each new robot observation or action tool call, emit one short public
+commentary line in this exact format:
+Stage: <current task stage>; Next: <next concrete operation and target>.
+Update it from the latest observation, including a recovery goal if needed.
+This is an operational status, not private reasoning. Do not put it only in
+tool code, a tool result, or the final answer. After receiving a tool result,
+state the updated stage and next operation before issuing another robot call.
+Do not batch successive robot actions; inspect each result first. Waiting for
+an already running call does not require another status line."""
 
 
 def _codex_environment() -> dict[str, str]:

@@ -321,7 +321,11 @@ def test_missing_reference_does_not_outrank_equally_relevant_duplicate():
                 {"world_xyz": [1.0, 2.0, 3.0], "valid": True, "error": None},
                 {"world_xyz": None, "valid": False, "error": "invalid depth"},
             ],
-            "summary": {"median_xyz": [1.0, 2.0, 3.0], "valid_count": 1, "total_count": 2},
+            "summary": {
+                "median_xyz": [1.0, 2.0, 3.0],
+                "valid_count": 1,
+                "total_count": 2,
+            },
         },
         {
             "results": [
@@ -363,3 +367,70 @@ def test_old_localization_results_survive_text_selection(adapter_type, coordinat
         and item.get("type") == "custom_tool_call_output"
     )
     assert retained == output
+
+
+@pytest.mark.parametrize("adapter_type", [CodexAdapter, AnchorAdapter])
+@pytest.mark.parametrize(
+    "header",
+    [
+        "Script completed\nWall time 0.0 seconds\nOutput:\n",
+        "Wall time: 0.1574 seconds\nOutput:\n",
+    ],
+)
+def test_completed_wrappers_do_not_enter_nc_and_payload_survives(adapter_type, header):
+    source = history()
+    output = source["input"][5]
+    payload = json.dumps({"camera": "agentview", "step": 0, "world_xyz": [1, 2, 3]})
+    output["output"] = [
+        {"type": "input_text", "text": header},
+        {"type": "input_text", "text": header + payload},
+        {"type": "input_image", "image_url": "data:image/png;base64,AA=="},
+    ]
+    original = copy.deepcopy(source)
+    session = ContextSession(adapter_type(), Features(), mode="text", rho_text=0.1)
+    result = session.process(source)
+    retained = next(
+        x
+        for x in result["input"]
+        if x.get("type") == "custom_tool_call_output"
+        and x.get("call_id") == output["call_id"]
+    )
+    assert retained["output"] == [
+        {"type": "input_text", "text": ""},
+        {"type": "input_text", "text": payload},
+        output["output"][2],
+    ]
+    assert not any("Wall time" in r["text"] for r in session.stats["text"]["records"])
+    assert source == original
+    assert session.process(source) == result
+    assert (
+        ContextSession(adapter_type(), Features(), mode="full").process(source)
+        == source
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Script running with cell ID 123\nWall time 0.0 seconds\nOutput:\n",
+        "Process exited with code 1\nOutput:\nfailed",
+        "Script completed\nWall time 0.0 seconds\nOutput:\nValueError: failed",
+        "Script completed\nWall time 0.0 seconds\nOutput:\nTraceback (most recent call last)\nfailed",
+    ],
+)
+def test_execution_failures_and_pending_handles_are_preserved(text):
+    source = history()
+    source["input"][5]["output"][0]["text"] = text
+    session = ContextSession(AnchorAdapter(), Features(), mode="text", rho_text=0.1)
+    result = session.process(source)
+    assert source["input"][5] in result["input"]
+    record = next(r for r in session.stats["text"]["records"] if r["text"] == text)
+    assert record["protected"] and record["selected"]
+
+
+def test_unknown_wrapper_is_not_normalized():
+    from rpent.context.text import normalize_tool_wrappers
+
+    source = history()
+    source["input"][5]["output"][0]["text"] = "Wall time unknown\nOutput:\nimportant"
+    assert normalize_tool_wrappers(source) is source

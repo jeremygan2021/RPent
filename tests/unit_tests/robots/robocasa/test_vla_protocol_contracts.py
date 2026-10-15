@@ -280,3 +280,48 @@ def test_vla_seed_replays_random_sequence_without_repeating_each_chunk() -> None
         np.testing.assert_array_equal(actual[1], expected[1])
         assert torch.equal(actual[2], expected[2])
     assert not torch.equal(first[2], second[2])
+
+
+def test_environment_reset_replays_all_rngs_without_legacy_override(monkeypatch):
+    import random
+
+    import numpy as np
+
+    from robots.robocasa.env_server import RoboCasaEnvFacade
+
+    monkeypatch.delenv("RLDX_RESET_SEED", raising=False)
+    facade = RoboCasaEnvFacade.__new__(RoboCasaEnvFacade)
+    facade.seed = 1
+    facade.env = SimpleNamespace(
+        seed=99,
+        rng=np.random.default_rng(99),
+        reset=lambda: (random.random(), np.random.random(), facade.env.rng.random()),
+        sim=SimpleNamespace(get_state=lambda: np.zeros(3)),
+        get_ep_meta=lambda: {},
+    )
+    first = facade.reset()
+    random.random()
+    np.random.random()
+    facade.env.rng.random()
+    assert facade.reset() == first
+    assert facade.env.seed == 1
+    monkeypatch.setenv("RLDX_RESET_SEED", "2")
+    assert facade.reset() != first
+    assert facade.env.seed == 2
+
+
+def test_unseeded_environment_generators_replay_and_factory_is_restored():
+    import numpy as np
+
+    from robots.robocasa.env_server import _seeded_environment_initialization
+
+    factory = np.random.default_rng
+    with _seeded_environment_initialization(1):
+        first = np.random.default_rng().random(4)
+        explicit = np.random.default_rng(123).random(4)
+    assert np.random.default_rng is factory
+    with _seeded_environment_initialization(1):
+        replay = np.random.default_rng().random(4)
+    np.testing.assert_array_equal(first, replay)
+    np.testing.assert_array_equal(explicit, factory(123).random(4))
+    assert np.random.default_rng is factory

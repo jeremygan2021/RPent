@@ -14,7 +14,8 @@
 
 """Loopback HTTP proxy for optional Codex context selection.
 
-Run one proxy per episode. Full mode forwards original bytes unchanged.
+Run one proxy per episode. Full mode skips context selection; robot profiles
+apply the same runtime interface filtering to Full and compressed requests.
 """
 
 import argparse
@@ -38,6 +39,48 @@ logger = logging.getLogger(__name__)
 _HOP = {"host", "connection", "content-length", "transfer-encoding", "accept-encoding"}
 
 
+def _trim_robot_runtime(request: dict) -> dict:
+    """Remove unused runtime interfaces from both robot comparison groups."""
+    result = copy.deepcopy(request)
+
+    def trim_tools(tools):
+        kept = []
+        for tool in tools:
+            if tool.get("type") == "namespace":
+                if tool.get("name") in {"collaboration", "clock"}:
+                    continue
+                if tool.get("name") == "functions":
+                    tool["tools"] = [
+                        entry for entry in tool.get("tools", [])
+                        if entry.get("name") not in {
+                            "request_user_input", "request_user_input_async"
+                        }
+                    ]
+            kept.append(tool)
+        return kept
+
+    if isinstance(result.get("tools"), list):
+        result["tools"] = trim_tools(result["tools"])
+    items = result.get("input")
+    if isinstance(items, list):
+        kept = []
+        for item in items:
+            if item.get("type") == "additional_tools":
+                item["tools"] = trim_tools(item.get("tools", []))
+            elif item.get("type") == "message" and item.get("role") == "developer":
+                item["content"] = [
+                    block for block in item.get("content", [])
+                    if not block.get("text", "").lstrip().startswith(
+                        ("<multi_agent_role>", "<multi_agent_mode>")
+                    )
+                ]
+                if not item["content"]:
+                    continue
+            kept.append(item)
+        result["input"] = kept
+    return result if result != request else request
+
+
 def rewrite_body(
     raw: bytes, encoding: str, session: ContextSession
 ) -> tuple[bytes, bool]:
@@ -57,6 +100,12 @@ def rewrite_body(
     payload = json.loads(data)
     if not isinstance(payload, dict):
         return raw, False
+    original_payload = payload
+    if (
+        os.environ.get("RPENT_CODEX_ROBOCASA_PROFILE") == "1"
+        or os.environ.get("RPENT_CODEX_LIBERO_PROFILE") == "1"
+    ):
+        payload = _trim_robot_runtime(payload)
     result = session.process(payload)
     session.stats.pop("cache_prefix", None)
     reference_path = os.environ.get("RPENT_FIXED_TOOL_REFERENCE") or (
@@ -91,7 +140,7 @@ def rewrite_body(
                 "memory_moved": moved,
                 "duplicates_removed": 0,
             }
-    if result is payload:
+    if result is original_payload:
         return raw, False
     return json.dumps(result, ensure_ascii=False).encode(), True
 

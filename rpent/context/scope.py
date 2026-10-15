@@ -15,12 +15,13 @@
 """Text ownership and shared tool-interface recognition for selection/accounting."""
 
 import copy
-import json
 import re
 from dataclasses import replace
 
 from rpent.context.codex import CodexAdapter
 from rpent.context.text import TextRecord
+
+from .parsing import parse_payload
 
 
 def _declared_tools(text: str) -> set[str]:
@@ -58,7 +59,7 @@ def schema(text: str) -> bool:
     if not isinstance(text, str):
         return False
     try:
-        value = json.loads(text)
+        value = parse_payload(text)
     except ValueError:
         value = None
 
@@ -72,8 +73,12 @@ def schema(text: str) -> bool:
 
 
 def active_error(text):
+    from .text import execution_status
+
+    if execution_status(text):
+        return True
     try:
-        value = json.loads(text)
+        value = parse_payload(text)
     except ValueError:
         return "Traceback (most recent call last)" in text
     if not isinstance(value, dict):

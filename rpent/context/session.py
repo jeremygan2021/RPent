@@ -21,6 +21,7 @@ from dataclasses import asdict, replace
 
 from .controller import Controller, FixedController, Thresholds
 from .observation import SCORING_VERSION, observe
+from .parsing import parsed_payloads
 from .selection import select_by_nc
 
 
@@ -78,6 +79,10 @@ class ContextSession:
 
     def process(self, request: dict) -> dict:
         """Apply independently enabled modalities using the same adapter and features."""
+        with parsed_payloads():
+            return self._process(request)
+
+    def _process(self, request: dict) -> dict:
         signature = hashlib.sha256(
             json.dumps(
                 (self.mode, self.stage, request), sort_keys=True, ensure_ascii=False
@@ -91,6 +96,11 @@ class ContextSession:
                 if self._last_result is None
                 else copy.deepcopy(self._last_result)
             )
+        original_request = request
+        if self.mode in {"text", "image_text", "all"}:
+            from .text import normalize_tool_wrappers
+
+            request = normalize_tool_wrappers(request)
         records = {
             "image": self.adapter.extract(request),
             "text": self.adapter.extract_text(request)[0],
@@ -145,7 +155,7 @@ class ContextSession:
                 decision, thresholds=replace(thresholds, memory=self.rho_memory)
             )
         try:
-            result = self._select(request)
+            result = self._select(request, records["image"])
         except Exception:
             (
                 self._seen,
@@ -172,11 +182,13 @@ class ContextSession:
             **asdict(decision),
         }
         self._last_request = signature
-        self._last_result = None if result is request else copy.deepcopy(result)
+        self._last_result = (
+            None if result is original_request else copy.deepcopy(result)
+        )
         self._last_stats = copy.deepcopy(self.stats)
         return result
 
-    def _select(self, request: dict) -> dict:
+    def _select(self, request: dict, image_records=None) -> dict:
         """Run selectors once in their existing dependency order."""
         memory_stats = None
         if self.memory_selector is not None:
@@ -184,7 +196,8 @@ class ContextSession:
             request, memory_stats = self.memory_selector.process(
                 request, self.adapter, self.features
             )
-        result = self._process_images(request)
+        # Memory selection replaces user text only; image positions stay unchanged.
+        result = self._process_images(request, image_records)
         if self.mode in {"text", "image_text", "all"}:
             result = self._text.process(
                 result, self.adapter, self.features, rho=self.rho_text, stage=self.stage
@@ -199,9 +212,10 @@ class ContextSession:
             self.stats["memory"] = memory_stats
         return result
 
-    def _process_images(self, request: dict) -> dict:
+    def _process_images(self, request: dict, records=None) -> dict:
         """Select from current native history; never inject stale archived items."""
-        records = self.adapter.extract(request)
+        if records is None:
+            records = self.adapter.extract(request)
         if self.mode in {"full", "text", "action"}:
             self.stats = {
                 "mode": self.mode,

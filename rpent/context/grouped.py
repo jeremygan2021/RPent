@@ -14,12 +14,12 @@
 
 """Atomic label/result candidates layered on the isolated Text prototype."""
 
-import json
 import re
 from dataclasses import dataclass, replace
 
 from rpent.context.text import TextRecord
 
+from .parsing import parse_payload
 from .scope import ScopeAdapter
 
 
@@ -51,7 +51,7 @@ class GroupedAdapter(ScopeAdapter):
                 re.fullmatch(r"[A-Za-z][A-Za-z0-9_. -]{0,79}", record.text.strip())
             )
             try:
-                payload = json.loads(following.text) if following else None
+                payload = parse_payload(following.text) if following else None
             except ValueError:
                 payload = None
             if label and isinstance(payload, (dict, list)):

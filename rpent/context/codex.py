@@ -18,7 +18,10 @@ import base64
 import copy
 import hashlib
 import json
+from collections import OrderedDict
 from dataclasses import dataclass
+
+from .parsing import parse_payload
 
 _OUTPUT_TYPES = {
     "custom_tool_call_output": "custom_tool_call",
@@ -74,9 +77,33 @@ class ImageRecord:
 class CodexAdapter:
     """Extract only recognized snapshot images; preserve all other content."""
 
+    _IMAGE_CACHE_LIMIT = 64 * 1024 * 1024
+
     def __init__(self, cameras: tuple[str, ...] = (), *, extended_history=True):
+        self._image_cache = OrderedDict()
+        self._image_cache_bytes = 0
         self.cameras = cameras
         self.extended_history = extended_history
+
+    def _decode_image(self, url: str) -> tuple[bytes, str]:
+        """Reuse image bytes and digest within this adapter, bounded by payload size."""
+        cached = self._image_cache.get(url)
+        if cached is not None:
+            self._image_cache.move_to_end(url)
+            return cached
+        data = base64.b64decode(url.split(",", 1)[1], validate=True)
+        value = (data, hashlib.sha256(data).hexdigest())
+        size = len(url) + len(data)
+        if size <= self._IMAGE_CACHE_LIMIT:
+            while (
+                self._image_cache
+                and self._image_cache_bytes + size > self._IMAGE_CACHE_LIMIT
+            ):
+                old_url, (old_data, _) = self._image_cache.popitem(last=False)
+                self._image_cache_bytes -= len(old_url) + len(old_data)
+            self._image_cache[url] = value
+            self._image_cache_bytes += size
+        return value
 
     def extract(self, request: dict) -> list[ImageRecord]:
         records = []
@@ -97,7 +124,7 @@ class CodexAdapter:
             for bi, block in enumerate(output):
                 if block.get("type") == "input_text":
                     try:
-                        value = json.loads(block.get("text", ""))
+                        value = parse_payload(block.get("text", ""))
                     except ValueError:
                         value = None
                     snapshot = (
@@ -116,7 +143,7 @@ class CodexAdapter:
                         or ";base64," not in url
                     ):
                         continue
-                    data = base64.b64decode(url.split(",", 1)[1], validate=True)
+                    data, digest = self._decode_image(url)
                     camera = (
                         self.cameras[camera_index]
                         if camera_index < len(self.cameras)
@@ -135,7 +162,7 @@ class CodexAdapter:
                             camera,
                             metadata,
                             snapshot.get("task_language", ""),
-                            hashlib.sha256(data).hexdigest(),
+                            digest,
                             data,
                             not camera or item["call_id"] in recent,
                             snapshot.get("step") == 0,
@@ -209,7 +236,7 @@ class CodexAdapter:
                 if not isinstance(block, dict) or block.get("type") != "input_text":
                     continue
                 try:
-                    value = json.loads(block.get("text", ""))
+                    value = parse_payload(block.get("text", ""))
                 except ValueError:
                     continue
                 if not isinstance(value, dict):
@@ -284,7 +311,7 @@ class CodexAdapter:
                     ):
                         continue
                     try:
-                        payload = json.loads(text)
+                        payload = parse_payload(text)
                     except ValueError:
                         payload = None
                     if (
@@ -382,7 +409,7 @@ class CodexAdapter:
                 if block.get("type") != "input_text":
                     continue
                 try:
-                    value = json.loads(block.get("text", ""))
+                    value = parse_payload(block.get("text", ""))
                 except ValueError:
                     continue
                 if (

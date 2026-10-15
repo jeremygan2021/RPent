@@ -15,6 +15,7 @@
 """RoboCasa env server — hosts the raw robosuite env in a subprocess, exposes basic calls via RPC."""
 
 import argparse
+from contextlib import contextmanager
 import inspect
 import os
 import re
@@ -27,6 +28,36 @@ from rpent.utils.logging import get_logger
 from rpent.utils.rpc.main_thread_serve import MainThreadServeMixin
 
 logger = get_logger("env_server")
+
+
+def _seed_environment(seed: int) -> None:
+    """Seed global generators used by scene and robot initialization."""
+    import random
+
+    if not 0 <= seed < 2**32:
+        raise ValueError("Environment seed must be in [0, 2**32)")
+    random.seed(seed)
+    np.random.seed(seed)
+
+
+@contextmanager
+def _seeded_environment_initialization(seed: int):
+    """Seed unseeded local generators only during isolated env initialization."""
+    _seed_environment(seed)
+    default_rng = np.random.default_rng
+
+    def seeded_default_rng(candidate=None):
+        if candidate is None:
+            candidate = int(np.random.randint(0, 2**32, dtype=np.uint64))
+        return default_rng(candidate)
+
+    # RoboCasa fixtures may construct default_rng() without using env.rng.
+    # This env server owns a single environment and initializes on its main thread.
+    np.random.default_rng = seeded_default_rng
+    try:
+        yield
+    finally:
+        np.random.default_rng = default_rng
 
 
 DEFAULT_CAMS = [
@@ -88,6 +119,7 @@ class RoboCasaEnvFacade(MainThreadServeMixin, BaseEnvFacade):
         use_camera_obs=False,
     ):
         super().__init__()
+        _seed_environment(seed)
         import robocasa  # noqa: F401 — registers robocasa envs
         import robosuite
         from robosuite.controllers import load_composite_controller_config
@@ -117,7 +149,8 @@ class RoboCasaEnvFacade(MainThreadServeMixin, BaseEnvFacade):
             seed=seed,
             **_split_kwargs(split),
         )
-        self.env = robosuite.make(**env_kwargs)
+        with _seeded_environment_initialization(seed):
+            self.env = robosuite.make(**env_kwargs)
         self._meta = {
             "task_name": self.task_name,
             "split": self.split,
@@ -151,23 +184,74 @@ class RoboCasaEnvFacade(MainThreadServeMixin, BaseEnvFacade):
 
     # ---- lifecycle ----
     def reset(self):
-        # RLDX_RESET_SEED=<episode_seed> -> reproduce the EXACT scene the fullshot eval
-        # generated for that episode, seeded the SAME way as the eval's VideoRecordingWrapper
-        # (random.seed + np.random.seed + robosuite env.rng/seed) BEFORE reset. Lets the
-        # hybrid run on the IDENTICAL reset layouts fullshot was scored on (true paired
-        # comparison). The eval formula: episode_seed = (run_seed + env_idx)*100000 + episode_id.
-        rs_env = os.environ.get("RLDX_RESET_SEED")
-        if rs_env:
-            import random
+        # Keep the legacy reset override, but seed ordinary matched episodes too.
+        configured_seed = os.environ.get("RLDX_RESET_SEED")
+        reset_seed = int(configured_seed) if configured_seed else self.seed
+        _seed_environment(reset_seed)
+        if hasattr(self.env, "seed"):
+            self.env.seed = reset_seed
+        if hasattr(self.env, "rng"):
+            self.env.rng = np.random.default_rng(reset_seed)
+        with _seeded_environment_initialization(reset_seed):
+            observation = self.env.reset()
+        if os.environ.get("RLDX_INITIAL_STATE_PATH"):
+            observation = self._restore_paired_initial_state()
+        import hashlib
+        import json
 
-            sd = int(rs_env)
-            random.seed(sd)
-            np.random.seed(sd)
-            if hasattr(self.env, "seed"):
-                self.env.seed = sd
-            if hasattr(self.env, "rng"):
-                self.env.rng = np.random.default_rng(sd)
-        return self.env.reset()
+        state_hash = hashlib.sha256(
+            np.asarray(self.env.sim.get_state().flatten()).tobytes()
+        ).hexdigest()
+        meta_hash = hashlib.sha256(
+            json.dumps(self.env.get_ep_meta(), sort_keys=True, default=str).encode()
+        ).hexdigest()
+        logger.info(
+            "Initial environment seed=%s state_sha256=%s episode_meta_sha256=%s",
+            reset_seed, state_hash, meta_hash,
+        )
+        return observation
+
+    def _restore_paired_initial_state(self):
+        """Reuse one episode using RoboCasa's demonstration replay sequence."""
+        import fcntl
+        import json
+        from pathlib import Path
+
+        path = Path(os.environ["RLDX_INITIAL_STATE_PATH"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.with_suffix(".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if path.exists():
+                saved = json.loads(path.read_text())
+            else:
+                saved = {
+                    "task": self.task_name, "split": self.split, "seed": self.seed,
+                    "model": self.env.sim.model.get_xml(),
+                    "ep_meta": self.env.get_ep_meta(),
+                    "states": self.env.sim.get_state().flatten().tolist(),
+                }
+                temporary = path.with_suffix(".tmp")
+                temporary.write_text(json.dumps(saved))
+                temporary.replace(path)
+        if (saved["task"], saved["split"], saved["seed"]) != (
+            self.task_name, self.split, self.seed
+        ):
+            raise ValueError("Paired initial state does not match the episode")
+        # Follow robocasa.utils.robomimic.robomimic_env_wrapper.reset_to:
+        # metadata reload, hard reset, XML reset, then flattened simulator state.
+        self.env.set_ep_meta(saved["ep_meta"])
+        with _seeded_environment_initialization(self.seed):
+            self.env.reset()
+            self.env.reset_from_xml_string(self.env.edit_model_xml(saved["model"]))
+        self.env.sim.reset()
+        self.env.sim.set_state_from_flattened(np.asarray(saved["states"]))
+        self.env.sim.forward()
+        self.env.update_state()
+        expected = np.asarray(saved["states"])
+        if not np.array_equal(self.env.sim.get_state().flatten(), expected):
+            raise RuntimeError("Paired simulator state restoration mismatch")
+        logger.info("Restored paired initial scene: %s", path)
+        return self.env._get_observations(force_update=True)
 
     def step(self, flat_action):
         """flat_action: np.ndarray[12] = [eef_pos(3), eef_rot(3), gripper(1),

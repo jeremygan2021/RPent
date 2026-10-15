@@ -14,11 +14,60 @@
 
 """Incremental selection of public assistant messages, not tool payloads."""
 
+import copy
+import re
 from dataclasses import dataclass
 
 from .selection import select_by_nc
 
 TEXT_OMITTED = "[Earlier assistant text omitted by context selection.]"
+
+
+_COMPLETED_WRAPPER = re.compile(
+    r"\A(?:Script completed\r?\n)?Wall time:?[ \t]+\d+(?:\.\d+)? seconds"
+    r"\r?\nOutput:[ \t]*(?:\r?\n|\Z)"
+)
+
+
+def execution_status(text: str) -> bool:
+    """Keep transport failures and pending execution handles out of selection."""
+    return bool(
+        re.search(
+            r"(?mi)^(?:Script running\b|Process (?:still running|running)\b"
+            r"|.*\b(?:cell|session) ID\b|Process exited with code [1-9]\d*\b"
+            r"|(?:Error|[A-Za-z]+Error|Exception):|Traceback \(most recent call last\))",
+            text,
+        )
+    )
+
+
+def normalize_tool_wrappers(request: dict) -> dict:
+    """Strip known completed-output headers without changing payload block IDs."""
+    if request.get("previous_response_id") or not isinstance(
+        request.get("input"), list
+    ):
+        return request
+    result = request
+    for i, item in enumerate(request["input"]):
+        if item.get("type") not in {"function_call_output", "custom_tool_call_output"}:
+            continue
+        output = item.get("output")
+        blocks = output if isinstance(output, list) else []
+        for j, block in enumerate(blocks):
+            if not isinstance(block, dict) or block.get("type") != "input_text":
+                continue
+            text = block.get("text")
+            if not isinstance(text, str) or execution_status(text):
+                continue
+            match = _COMPLETED_WRAPPER.match(text)
+            if match is None:
+                continue
+            if result is request:
+                result = copy.deepcopy(request)
+            # Leave an empty text block for a header-only result, preserving the
+            # paired call and stable block indices used by all selectors.
+            result["input"][i]["output"][j]["text"] = text[match.end() :]
+    return result
 
 
 @dataclass(frozen=True)
