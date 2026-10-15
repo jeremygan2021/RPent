@@ -1,0 +1,16 @@
+{
+  "controller_id": "<verified controller id>",
+  "controller_contract": "whole_body",
+  "native_endpoint": "http://<registered controller host>:8916",
+  "motor_profile_sha256": "<verified profile sha256>",
+  "native_token_file": "<private owner token file>",
+  "token_file": "<private RPent API token file>",
+  "output_dir": "<private task output directory>",
+  "hardware_cameras": {
+    "head": {"source_id": "<registered head source>", "url": "http://<registered controller host>:8907/v1/camera-sources/<head source>.jpg", "token_file": "<private camera token file>"},
+    "left_wrist": {"source_id": "<registered left source>", "url": "http://<registered controller host>:8907/v1/camera-sources/<left source>.jpg", "token_file": "<private camera token file>"},
+    "right_wrist": {"source_id": "<registered right source>", "url": "http://<registered controller host>:8907/v1/camera-sources/<right source>.jpg", "token_file": "<private camera token file>"}
+  },
+  "planner": {"codex_bin": "/usr/lib/chatgpt/resources/codex"},
+  "skills": {"url": "http://127.0.0.1:8920", "token_file": "<private skill token file>"}
+}

@@ -1,0 +1,18 @@
+{
+  "controller_id": "",
+  "token_file": "/private/rpent/api-token",
+  "native_token_file": "/private/robot/native-token",
+  "console_key_file": "/private/robot/console-key",
+  "output_dir": "/private/rpent/tasks",
+  "stop_timeout_s": 5.0,
+  "max_frame_age_s": 1.0,
+  "max_camera_skew_s": 0.25,
+  "max_observation_age_s": 2.0,
+  "planner": {
+    "codex_bin": "/usr/lib/chatgpt/resources/codex"
+  },
+  "skills": {
+    "url": "http://127.0.0.1:8920",
+    "token_file": "/private/robot/grasp-api-token"
+  }
+}

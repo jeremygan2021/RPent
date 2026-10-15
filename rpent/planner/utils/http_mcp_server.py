@@ -33,6 +33,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import os
 import socket
 import threading
 from typing import Any
@@ -196,7 +197,12 @@ class HttpMcpServer:
     ) -> None:
         self._toolkit = toolkit
         self._host = host
-        self._port = port or _pick_free_port(host)
+        isolated_port = (
+            int(os.environ.get("RPENT_MCP_PORT", "0"))
+            if os.environ.get("RPENT_PLANNER_WORKSPACE")
+            else 0
+        )
+        self._port = port or isolated_port or _pick_free_port(host)
         self._path = path if path.startswith("/") else f"/{path}"
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None

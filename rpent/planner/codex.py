@@ -103,7 +103,11 @@ class CodexPlanner(Planner):
     ):
         """Initialize the Codex SDK backend."""
         self._output_dir = str(output_dir)
-        self._repo_root = str(repo_root) if repo_root else str(get_repo_root())
+        self._repo_root = (
+            str(repo_root)
+            if repo_root
+            else os.environ.get("RPENT_PLANNER_WORKSPACE", str(get_repo_root()))
+        )
         self._timeout_s = timeout_s
         self._extra_dirs = extra_dirs or []
         self._output_path = Path(output_path) if output_path else None
